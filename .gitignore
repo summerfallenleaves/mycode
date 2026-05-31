@@ -143,6 +143,6 @@ vite.config.ts.timestamp-*
 .vite/
 
 # Project-specific
-.mycode/
 dist/
 .DS_Store
+.mycode/sessions/
