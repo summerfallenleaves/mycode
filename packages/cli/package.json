@@ -1,0 +1,40 @@
+{
+  "name": "@my-agent/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "mycode": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "start": "tsx src/index.tsx",
+    "build": "tsup src/index.tsx --format esm --dts --clean",
+    "dev": "tsup src/index.tsx --format esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@my-agent/core": "workspace:*",
+    "@my-agent/shared": "workspace:*",
+    "ink": "^7.0.0",
+    "react": "^19.0.0",
+    "meow": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "tsup": "^8.4.0",
+    "tsx": "^4.0.0",
+    "vitest": "^3.1.0",
+    "typescript": "^5.7.0",
+    "ink-testing-library": "^4.0.0"
+  }
+}

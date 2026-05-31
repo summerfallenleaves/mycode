@@ -1,0 +1,28 @@
+{
+  "name": "@my-agent/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@my-agent/core": "workspace:*",
+    "@my-agent/shared": "workspace:*",
+    "next": "^15.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsup": "^8.4.0",
+    "vitest": "^3.1.0",
+    "typescript": "^5.7.0"
+  }
+}
