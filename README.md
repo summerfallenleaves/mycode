@@ -37,6 +37,7 @@ mycode/
 - **Provider 抽象**: 通过 `packages/core/src/llm/adapter.ts` 封装 Vercel AI SDK，支持 OpenAI 格式和 Anthropic 格式
 - **JSONC 配置**: 运行时从 `.mycode/mycode.jsonc` 读取 LLM、MCP、技能、Safety 等配置
 - **上下文监测**: StatusBar 实时显示上下文使用率（字符/2 粗估），颜色按使用率渐变
+- **会话持久化**: 第一条消息自动分配 sessionId，`.mycode/sessions/` 目录 JSON 文件存储，`mycode -c <sessionId>` 恢复历史会话，`/exit` 显示恢复提示
 
 ## 快速开始
 
@@ -187,7 +188,7 @@ pnpm --filter @my-agent/core test
 ✅ 界面防闪烁（50ms 事件缓冲 flush）  
 ✅ 问答正确分组（user_message 分隔）+ 左右布局（用户右对齐，AI 左对齐）  
 ✅ Q&A 模式 — 多项配置/操作通过交互式选择完成  
-❌ Session 持久化待实现  
+✅ Session 持久化 — FileSessionStore（JSON 文件存储）、`/resume` 列出恢复历史会话、`mycode -c <sessionId>` 命令行恢复、`/exit` 显示恢复提示  
 ❌ 速率限制与上下文压缩待集成  
 ❌ 测试覆盖率待补充
 

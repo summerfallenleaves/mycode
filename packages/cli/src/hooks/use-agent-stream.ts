@@ -63,6 +63,13 @@ export function useAgentStream() {
     }))
   }, [])
 
+  const addHistoryEvents = useCallback((historyEvents: ViewEvent[]) => {
+    setState(prev => ({
+      ...prev,
+      events: [...prev.events, ...historyEvents],
+    }))
+  }, [])
+
   const run = useCallback(async (input: string, agent: Agent) => {
     agentRef.current = agent
     isRunningRef.current = true
@@ -128,5 +135,5 @@ export function useAgentStream() {
     setState({ events: [], isRunning: false, error: null, pendingQuestion: null })
   }, [])
 
-  return { ...state, addUserMessage, run, answerQuestion, reset }
+  return { ...state, addUserMessage, addHistoryEvents, run, answerQuestion, reset }
 }

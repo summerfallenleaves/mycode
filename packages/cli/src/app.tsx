@@ -2,13 +2,14 @@
  * @fileoverview Root Ink App component: WelcomeHint, input handling (useInput), command system (/exit, /new, /models, /mcps, /skills), orchestrates useAgentStream with config from .mycode/mycode.jsonc
  * @module @my-agent/cli/src/app
  */
-import { Box, Text, useInput } from 'ink'
+import { Box, Text, useInput, useStderr } from 'ink'
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import type { JSX } from 'react'
 import { execSync } from 'node:child_process'
-import { Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool, MCPClientManager, scanSkills, addProvider } from '@my-agent/core'
+import { Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool, MCPClientManager, scanSkills, addProvider, FileSessionStore } from '@my-agent/core'
 import type { LLMProviderConfig, MCPServerStatus, SkillInfo } from '@my-agent/core'
 import { useAgentStream } from './hooks/use-agent-stream.js'
+import type { ViewEvent } from './hooks/use-agent-stream.js'
 import { StatusBar } from './components/status-bar.js'
 import { ShellOutputPanel } from './components/shell-output-panel.js'
 import type { ShellOutputData } from './components/shell-output-panel.js'
@@ -21,7 +22,7 @@ import { QuestionPanel } from './components/question-panel.js'
 import { UnknownCmdPanel } from './components/unknown-cmd-panel.js'
 import { EventStream } from './components/event-stream.js'
 
-const COMMANDS = ['/connect', '/exit', '/mcps', '/models', '/new', '/q', '/skills'] as const
+const COMMANDS = ['/connect', '/exit', '/mcps', '/models', '/new', '/q', '/resume', '/skills'] as const
 const PKG_VERSION = '0.0.1'
 
 type ProviderEntry = [name: string, config: LLMProviderConfig]
@@ -31,7 +32,6 @@ function getProviderList(): ProviderEntry[] {
   return Object.entries(config.llm.providers)
 }
 
-/** Shared ToolRegistry that accumulates both built-in and MCP tools. */
 const SHARED_TOOLS = new ToolRegistry()
 SHARED_TOOLS.register(readFileTool)
 SHARED_TOOLS.register(editTool)
@@ -42,17 +42,17 @@ SHARED_TOOLS.register(globTool)
 SHARED_TOOLS.register(questionTool)
 SHARED_TOOLS.register(todowriteTool)
 
-/** Start MCP connections at module load time — before component mount. */
+const SESSION_STORE = new FileSessionStore(`${process.cwd()}/.mycode/sessions`)
+
 const { config: startConfig } = readConfig()
 const MCP_MANAGER = startConfig.mcpServers && Object.keys(startConfig.mcpServers).length > 0
   ? new MCPClientManager(startConfig.mcpServers)
   : null
 if (MCP_MANAGER) {
-  // Fire and forget — status updates polled by component
   MCP_MANAGER.connectAll(SHARED_TOOLS)
 }
 
-function createAgent(providerName: string, preScannedSkills?: SkillInfo[]): Agent {
+function createAgent(providerName: string, preScannedSkills?: SkillInfo[], resumeSessionId?: string): Agent {
   const { config } = readConfig()
   const provider = config.llm.providers[providerName]
   if (!provider) throw new Error(`Provider "${providerName}" not found`)
@@ -72,6 +72,8 @@ function createAgent(providerName: string, preScannedSkills?: SkillInfo[]): Agen
     skillsConfig: config.skills,
     skills: preScannedSkills,
     projectRoot: process.cwd(),
+    sessionStore: SESSION_STORE,
+    resumeSessionId,
   })
 }
 
@@ -82,6 +84,7 @@ const COMMAND_HELP: Record<string, string> = {
   '/models': '切换模型',
   '/new': '开始新对话',
   '/q': '退出（快捷）',
+  '/resume': '恢复历史会话',
   '/skills': '查看可用技能',
 }
 
@@ -115,7 +118,11 @@ function WelcomeHint({ skillCommands }: { skillCommands: Array<{ name: string; d
   )
 }
 
-export default function App(): JSX.Element {
+interface AppProps {
+  continueSessionId?: string
+}
+
+export default function App({ continueSessionId }: AppProps): JSX.Element {
   const [input, setInput] = useState('')
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [showModelSelect, setShowModelSelect] = useState(false)
@@ -133,8 +140,15 @@ export default function App(): JSX.Element {
   const [connectSelectIdx, setConnectSelectIdx] = useState(0)
   const [unknownCmd, setUnknownCmd] = useState<string | null>(null)
   const [contextUsage, setContextUsage] = useState<{ used: number; limit: number; percentage: number } | null>(null)
-  const { events, isRunning, error, run, reset, addUserMessage, pendingQuestion, answerQuestion } = useAgentStream()
+  const [showResumeList, setShowResumeList] = useState(false)
+  const [resumeList, setResumeList] = useState<Array<{ sessionId: string; messageCount: number; updatedAt: string }>>([])
+  const [resumeSelectIdx, setResumeSelectIdx] = useState(0)
+  const { events, isRunning, error, run, reset, addUserMessage, addHistoryEvents, pendingQuestion, answerQuestion } = useAgentStream()
   const agentRef = useRef<Agent | null>(null)
+  const { stderr } = useStderr()
+  const sessionRestoredRef = useRef(false)
+  const skillsRef = useRef(skills)
+  useEffect(() => { skillsRef.current = skills }, [skills])
 
   const allProviders = useMemo(() => getProviderList(), [])
   const activeProvider = selectedProvider ?? allProviders[0]?.[0] ?? ''
@@ -166,10 +180,43 @@ export default function App(): JSX.Element {
       const extraPaths = config.skills?.paths ?? []
       const found = scanSkills({ projectRoot: process.cwd(), extraPaths })
       setSkills(found)
+      // Pre-create agent so /exit always has a session ID
+      if (!continueSessionId && !agentRef.current) {
+        agentRef.current = createAgent(activeProvider, found)
+      }
     } catch {
       setSkills([])
     }
   }, [])
+
+  useEffect(() => {
+    if (!continueSessionId) return
+    if (sessionRestoredRef.current) return
+    sessionRestoredRef.current = true
+
+    SESSION_STORE.load(continueSessionId).then(msgs => {
+      if (msgs && msgs.length > 0) {
+        const agent = createAgent(activeProvider, skillsRef.current, continueSessionId)
+        agentRef.current = agent
+        
+        const historyEvents: ViewEvent[] = []
+        for (const msg of msgs) {
+          if (msg.role === 'user') {
+            historyEvents.push({ type: 'user_message', content: msg.content })
+          } else if (msg.role === 'assistant') {
+            historyEvents.push({ type: 'answer_start', turnId: `history-${Date.now()}` })
+            historyEvents.push({ type: 'answer_delta', turnId: `history-${Date.now()}`, delta: msg.content })
+            historyEvents.push({ type: 'answer_end', turnId: `history-${Date.now()}`, fullText: msg.content })
+          }
+        }
+        addHistoryEvents(historyEvents)
+      } else {
+        setUnknownCmd(`会话 ${continueSessionId.slice(0, 8)}... 不存在或为空`)
+      }
+    }).catch(() => {
+      setUnknownCmd(`会话 ${continueSessionId.slice(0, 8)}... 加载失败`)
+    })
+  }, [continueSessionId, activeProvider])
 
   // Build dynamic command set: static commands + skill-derived commands
   const allCommands = useMemo(() => {
@@ -211,6 +258,33 @@ export default function App(): JSX.Element {
       }
       if ((key.shift && key.tab) || key.upArrow) {
         setModelSelectIdx(prev => (prev - 1 + allProviders.length) % allProviders.length)
+        return
+      }
+      return
+    }
+
+    if (showResumeList) {
+      if (key.escape) {
+        setShowResumeList(false)
+        return
+      }
+      if (key.return && resumeList.length > 0) {
+        const selected = resumeList[resumeSelectIdx]
+        if (selected) {
+          reset()
+          const agent = createAgent(activeProvider, skills, selected.sessionId)
+          agentRef.current = agent
+          setShowResumeList(false)
+          setInput('')
+        }
+        return
+      }
+      if ((key.tab && !key.shift) || key.downArrow) {
+        setResumeSelectIdx(prev => (prev + 1) % resumeList.length)
+        return
+      }
+      if ((key.shift && key.tab) || key.upArrow) {
+        setResumeSelectIdx(prev => (prev - 1 + resumeList.length) % resumeList.length)
         return
       }
       return
@@ -355,14 +429,14 @@ export default function App(): JSX.Element {
       return
     }
     if (key.return && input.trim()) {
+      let submitInput = input.trim()
       if (matches.length > 0) {
         const selected = matches[selectedIdx]
         if (selected) {
-          setInput(selected)
-          return
+          submitInput = selected
         }
       }
-      const trimmed = input.trim()
+      const trimmed = submitInput
       if (trimmed.startsWith('!') && trimmed.length > 1) {
         const cmd = trimmed.slice(1).trim()
         if (cmd) {
@@ -390,7 +464,7 @@ export default function App(): JSX.Element {
       if (trimmed === '/exit' || trimmed === '/q') {
         const sessionId = agentRef.current?.getSessionId()
         if (sessionId) {
-          console.log(`\n会话ID: ${sessionId}`)
+          stderr.write(`\n恢复会话：mycode -c ${sessionId}\n`)
         }
         process.exit(0)
         return
@@ -398,6 +472,15 @@ export default function App(): JSX.Element {
       if (trimmed === '/new') {
         reset()
         agentRef.current = null
+        setInput('')
+        return
+      }
+      if (trimmed === '/resume') {
+        SESSION_STORE.list().then(list => {
+          setResumeList(list)
+          setShowResumeList(true)
+          setResumeSelectIdx(0)
+        })
         setInput('')
         return
       }
@@ -493,6 +576,20 @@ export default function App(): JSX.Element {
         : connectStep ? <ConnectWizardPanel step={connectStep} config={connectConfig} selectIdx={connectSelectIdx} />
         : unknownCmd ? <UnknownCmdPanel cmd={unknownCmd} />
         : showModelSelect ? <ModelSelectPanel providers={allProviders} selectIdx={modelSelectIdx} />
+        : showResumeList ? (
+          <Box flexDirection="column" borderStyle="round" borderColor="cyan" padding={1}>
+            <Text bold>历史会话 (Enter 恢复, Esc 取消)</Text>
+            {resumeList.length === 0 ? (
+              <Text dimColor>暂无历史会话</Text>
+            ) : (
+              resumeList.map((s, i) => (
+                <Text key={s.sessionId} inverse={i === resumeSelectIdx} color={i === resumeSelectIdx ? 'cyan' : undefined}>
+                  {` ${i + 1}. ${s.sessionId.slice(0, 8)}... (${s.messageCount} 条消息)`}
+                </Text>
+              ))
+            )}
+          </Box>
+        )
         : pendingQuestion ? <QuestionPanel question={pendingQuestion} />
         : events.length === 0 ? <WelcomeHint skillCommands={skills.map(s => ({ name: s.name, desc: s.description }))} />
         : <EventStream events={events} isRunning={isRunning} />}

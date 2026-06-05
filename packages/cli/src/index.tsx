@@ -8,20 +8,27 @@ import meow from 'meow'
 import { render } from 'ink'
 import App from './app.js'
 
-meow(
+const cli = meow(
   `
   Usage
-    $ mycode <input>
+    $ mycode [options]
 
   Options
-    --help     Show help
-    --version  Show version
+    --continue, -c <sessionId>  Resume a previous session
+    --help                      Show help
+    --version                   Show version
 `,
   {
     importMeta: import.meta,
+    flags: {
+      continueSessionId: {
+        type: 'string',
+        shortFlag: 'c',
+      },
+    },
   },
 )
 
-render(React.createElement(App))
+render(React.createElement(App, { continueSessionId: cli.flags.continueSessionId }))
 
 

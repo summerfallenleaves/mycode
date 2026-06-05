@@ -13,7 +13,7 @@ import { createTimeoutSignal } from './safety/timeout.js'
 import { scanSkills, formatSkillPrompt } from './skill/index.js'
 import type { SkillInfo } from './skill/index.js'
 import type { SkillsConfig } from './config.js'
-import { findConfigDir } from './config.js'
+import type { SessionStore } from './session/store.js'
 
 export interface AgentConfig {
   llm: LLMAdapter
@@ -22,24 +22,29 @@ export interface AgentConfig {
   systemPrompt?: string
   maxSteps?: number
   sessionTimeoutMs?: number
-  /** Skills configuration from mycode.jsonc */
   skillsConfig?: SkillsConfig
-  /** Pre-scanned skills. If provided, skips disk scanning. */
   skills?: SkillInfo[]
-  /** Project root directory for resolving skill paths */
   projectRoot?: string
-  /** Context window limit in tokens. Used for usage display. */
   maxContextTokens?: number
+  sessionStore?: SessionStore | null
+  resumeSessionId?: string
+}
+
+type InternalAgentConfig = Required<Omit<AgentConfig, 'sessionStore' | 'resumeSessionId'>> & {
+  resolvedSystemPrompt: string
+  sessionStore: SessionStore | null
+  resumeSessionId: string | undefined
 }
 
 export class Agent {
-  private readonly config: Required<AgentConfig> & { resolvedSystemPrompt: string }
-  private readonly sessionId: string
-  private readonly sessionDir: string
+  private readonly config: InternalAgentConfig
+  private sessionId: string | null = null
+  private sessionDir: string | null = null
+  private readonly sessionStore: SessionStore | null
+  private readonly resumeSessionId: string | undefined
   private messages: Array<LLMMessage> = []
   private resolveQuestion: ((answers: string[]) => void) | null = null
 
-  /** When set during tool execution, the agent is waiting for user input to a question tool call. */
   pendingQuestion: QuestionPayload | null = null
 
   constructor(config: AgentConfig) {
@@ -52,10 +57,11 @@ export class Agent {
       skillsConfig: {} as SkillsConfig,
       projectRoot: process.cwd(),
       maxContextTokens: 200_000,
+      sessionStore: null as SessionStore | null,
+      resumeSessionId: undefined as string | undefined,
     }
     const merged = { ...defaults, ...config }
 
-    // Scan skills from configured paths and append to system prompt
     const skillsEnabled = merged.skillsConfig?.enabled ?? true
     let skillPrompt = ''
     if (skillsEnabled) {
@@ -71,25 +77,54 @@ export class Agent {
         ? `${merged.systemPrompt}\n\n${skillPrompt}`
         : merged.systemPrompt,
     }
-    this.sessionId = randomUUID()
-    this.sessionDir = resolve(findConfigDir(), 'sessions', this.sessionId)
+
+    this.sessionStore = merged.sessionStore
+    this.resumeSessionId = merged.resumeSessionId
+
+    if (merged.resumeSessionId) {
+      this.sessionId = merged.resumeSessionId
+      this.sessionDir = resolve(process.cwd(), '.mycode', 'sessions', this.sessionId)
+      mkdirSync(this.sessionDir, { recursive: true })
+
+      if (this.sessionStore) {
+        this.sessionStore.load(merged.resumeSessionId).then(msgs => {
+          if (msgs) {
+            this.messages = msgs.map(m => ({
+              role: m.role,
+              content: m.content,
+              ...(m.toolName ? { toolName: m.toolName } : {}),
+              ...(m.toolResult ? { toolResult: m.toolResult } : {}),
+            })) as Array<LLMMessage>
+          }
+        })
+      }
+    }
+  }
+
+  private initializeSession(): void {
+    if (this.sessionId) return
+
+    this.sessionId = this.resumeSessionId ?? randomUUID()
+    this.sessionDir = resolve(process.cwd(), '.mycode', 'sessions', this.sessionId)
     mkdirSync(this.sessionDir, { recursive: true })
   }
 
   async *run(input: string): AsyncGenerator<AgentEvent, void, undefined> {
+    this.initializeSession()
+
     const turnId = randomUUID()
     const signal = createTimeoutSignal(this.config.sessionTimeoutMs)
 
     this.messages.push({ role: 'user', content: input })
 
-    yield { type: 'session_start', sessionId: this.sessionId, timestamp: Date.now() }
+    yield { type: 'session_start', sessionId: this.sessionId!, timestamp: Date.now() }
     yield { type: 'thinking_start', turnId }
 
     const toolEventBuffer: ToolEvent[] = []
 
     const toolContext: ToolContext = {
-      sessionId: this.sessionId,
-      sessionDir: this.sessionDir,
+      sessionId: this.sessionId!,
+      sessionDir: this.sessionDir!,
       signal,
       logger: () => {},
       emitToolEvent: (event) => { toolEventBuffer.push(event) },
@@ -141,21 +176,35 @@ export class Agent {
       const message = error instanceof Error ? error.message : String(error)
       yield { type: 'error', turnId, code: 'agent_error', message }
       yield { type: 'thinking_end', turnId, fullText: '' }
-      yield { type: 'session_end', sessionId: this.sessionId, reason: 'error', timestamp: Date.now() }
+      yield { type: 'session_end', sessionId: this.sessionId!, reason: 'error', timestamp: Date.now() }
+      await this.persistMessages()
       return
     }
 
-    // Sync response messages back to conversation context
     const newMessages = await responseMessages
     for (const msg of newMessages) {
       this.messages.push(msg)
     }
 
     yield { type: 'thinking_end', turnId, fullText: '' }
-    yield { type: 'session_end', sessionId: this.sessionId, reason: 'completed', timestamp: Date.now() }
+    yield { type: 'session_end', sessionId: this.sessionId!, reason: 'completed', timestamp: Date.now() }
+    await this.persistMessages()
   }
 
-  getSessionId(): string {
+  private async persistMessages(): Promise<void> {
+    if (!this.sessionStore || !this.sessionId) return
+
+    const toSave = this.messages.map(m => ({
+      role: m.role as 'user' | 'assistant' | 'tool',
+      content: m.content,
+      ...(m.toolName ? { toolName: m.toolName } : {}),
+      ...(m.toolResult ? { toolResult: m.toolResult } : {}),
+    }))
+
+    await this.sessionStore.save(this.sessionId, toSave)
+  }
+
+  getSessionId(): string | null {
     return this.sessionId
   }
 
@@ -163,11 +212,6 @@ export class Agent {
     return this.messages
   }
 
-  /**
-   * Return estimated context usage based on message content length.
-   * Includes the resolved system prompt (with injected skills) since it's sent with every LLM call.
-   * Uses a rough 2-char-per-token heuristic for mixed CJK/English.
-   */
   getContextUsage(): { used: number; limit: number; percentage: number } {
     const systemLength = this.config.resolvedSystemPrompt.length
     const messagesLength = this.messages
