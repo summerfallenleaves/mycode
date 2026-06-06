@@ -221,8 +221,13 @@ pnpm publish -r --access public     # 发布所有公开包
 .mycode/            # 运行时配置目录（不打包）
   mycode.jsonc      # Agent 配置（LLM / MCP / 技能 / 安全）
   skills/           # 技能文件（运行时发现）
+  sessions/         # 会话持久化（JSON 文件）
+  memory/           # Project Memory 存储（phase1c+）
 packages/
   core/     # Agent 核心逻辑（纯 TS，零 UI 依赖）
+    src/
+      memory/       # Memory 系统（manager/extractor/compressor/types）
+      runtime/      # 运行时组件（session-store, memory-store）
   cli/      # Ink 终端界面
   web/      # Next.js Web 应用
   shared/   # 共享类型和工具函数
@@ -240,3 +245,22 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 - MCP 服务器地址和参数在 `mycode.jsonc` 的 `mcpServers` 字段中配置。MCP 工具通过 `MCPClientManager` 连接到 ToolRegistry。
 - 上下文窗口上限通过 `agent.maxContextTokens` 配置。
 - 所有源码文件必须包含文件级 `@fileoverview` JSDoc 注释作为文件说明。
+
+## Memory 系统操作约定
+
+- **MYCODE.md**（人工规则）：放置于 `~/.mycode/MYCODE.md`（全局）和项目根 `./MYCODE.md`（项目级），合并为 `## Project Rules` 注入 system prompt。用于静态、长期不变的约定。
+- **会话持久化**（动态回溯）：通过 `FileSessionStore` 自动保存到 `.mycode/sessions/<sessionId>/messages.json`。每次 run 结束后自动触发，无需手动干预。
+- **Project Memory**（结构化记忆）：通过 `memoryTool`（search/add/list）或 CLI 命令（`/remember` `/forget`）操作。记忆存储于 `.mycode/memory/memory.json`（project 级）和 `~/.mycode/memory/memory.json`（global 级）。自动注入到 system prompt（前 4000 字符）。
+- **注入顺序**（由前到后覆盖）：`systemPrompt` → `MYCODE.md` → `memory context` → `skillPrompt`
+- **记忆类型**（5 种）：`convention`（规范）、`decision`（决策）、`fact`（事实）、`preference`（偏好）、`lesson`（经验教训）
+- **内容过滤器**：Memory 写入时自动拒绝密钥格式（sk-、AKIA、ghp_ 等），避免敏感信息泄漏
+- **Memory 文件版本化**：`MemoryFile` 包含 `version: 1` 字段，便于未来迁移
+
+## 上下文压缩
+
+- **自动压缩**：当 `getContextUsage()` 百分比超过 `contextCompressionThreshold`（默认 70%）时触发，保留最近 2 轮用户对话完整，对更早内容由 LLM 生成摘要（300 字以内，`assistant` 角色插入）。
+- **冷却机制**：自动压缩后需间隔 `minCompressionInterval` 轮（默认 3）才能再次触发，避免频繁消耗 token。
+- **工具结果裁剪**：压缩完成后自动执行 `pruneToolResults()`，将序列化长度超过 `maxToolResultLength`（默认 2000 字符）的工具结果截断，释放内存。
+- **LLM 失败回退**：LLM 摘要返回空或抛异常时，自动回退到仅做工具结果裁剪，不静默失败。
+- **手动压缩**：CLI 输入 `/compact` 可绕过冷却期手动触发完整压缩流程，结果在状态栏显示。
+- **压缩事件**：`context_compressed` 事件携带 `before`/`after`（消息条数）、`beforeTokens`/`afterTokens`（估算 token）、`compressionType`（auto/manual）、`prunedToolResults` 字段。`before`/`after` 为必填保持向后兼容。

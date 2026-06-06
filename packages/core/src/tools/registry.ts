@@ -21,6 +21,8 @@ export interface ToolContext {
   sessionId: string
   /** Absolute path to the session's private directory (.mycode/sessions/{sessionId}/). Tools should store session-scoped data here. */
   sessionDir: string
+  /** Absolute path to the project root directory. Tools can use this for project-scoped storage. */
+  projectRoot: string
   signal: AbortSignal
   logger: (msg: string) => void
   askQuestion?: (question: QuestionPayload) => Promise<string[]>

@@ -111,6 +111,24 @@ export function EventStream({
             <Text key={`int-${ti}`} color="yellow">Agent is waiting for input: {event.question.question}</Text>,
           )
           break
+        case 'memory_extracted':
+          elements.push(
+            <Text key={`mem-${ti}`} color="green">已自动提取 {event.count} 条记忆</Text>,
+          )
+          break
+        case 'context_compressed':
+          const detail = event.beforeTokens != null
+            ? ` (${Math.round(event.beforeTokens / 1000)}K → ${Math.round((event.afterTokens ?? 0) / 1000)}K tokens)`
+            : ''
+          const pruneInfo = event.prunedToolResults
+            ? `，裁剪 ${event.prunedToolResults} 个工具结果`
+            : ''
+          elements.push(
+            <Text key={`ctx-${ti}`} color="yellow">
+              {event.compressionType === 'manual' ? '手动压缩' : '自动压缩'}：{event.before} → {event.after} 条消息{detail}{pruneInfo}
+            </Text>,
+          )
+          break
       }
     }
 

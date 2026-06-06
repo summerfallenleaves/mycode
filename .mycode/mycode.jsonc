@@ -11,7 +11,7 @@
       "deepseek-openai": {
         "format": "openai",
         "baseUrl": "https://api.deepseek.com",
-        "apiKey": "sk-****",
+        "apiKey": "deepseek-api",
         "model": "deepseek-v4-flash",
         "contextWindow": 1_000_000,
         "maxOutputTokens": 384_000
@@ -19,7 +19,7 @@
       "deepseek-anthropic": {
         "format": "anthropic",
         "baseUrl": "https://api.deepseek.com/anthropic",
-        "apiKey": "sk-****",
+        "apiKey": "deepseek-api",
         "model": "deepseek-v4-pro",
         "contextWindow": 1_000_000,
         "maxOutputTokens": 384_000
@@ -35,7 +35,7 @@
       "type": "http",
       "url": "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp",
       "headers": {
-        "Authorization": "Bearer ****"
+        "Authorization": "Bearer zhipu-api"
       }
     },
     "zai-mcp-server": {
@@ -43,21 +43,21 @@
       "command": "npx",
       "args": ["-y", "@z_ai/mcp-server"],
       "env": {
-        "Z_AI_API_KEY": "****"
+        "Z_AI_API_KEY": "zhipu-api"
       }
     },
     "web-reader": {
       "type": "http",
       "url": "https://open.bigmodel.cn/api/mcp/web_reader/mcp",
       "headers": {
-        "Authorization": "Bearer ****"
+        "Authorization": "Bearer zhipu-api"
       }
     },
     "zread": {
       "type": "http",
       "url": "https://open.bigmodel.cn/api/mcp/zread/mcp",
       "headers": {
-        "Authorization": "Bearer ****"
+        "Authorization": "Bearer zhipu-api"
       }
     }
   },
@@ -66,9 +66,17 @@
   "agent": {
     "systemPrompt": "你是mycode，由summerfallenleaves开发的AI助手。",
     "maxSteps": 25,
-    "sessionTimeoutMs": 300_000,
+    "runTimeoutMs": 300_000,
     // 上下文窗口限制（字节数），超限后自动压缩
-    "maxContextTokens": 128_000
+    "maxContextTokens": 128_000,
+    // 会话结束时自动提取关键信息存入记忆库
+    "autoMemoryExtraction": true,
+    // 上下文使用率超过此百分比（0-100）时自动压缩历史消息
+    "contextCompressionThreshold": 70,
+    // 工具结果超过此字符数时自动截断（0=禁用）
+    "maxToolResultLength": 2000,
+    // 两次自动压缩之间的最小用户轮次间隔
+    "minCompressionInterval": 3
   },
 
   // ── 技能目录 ──

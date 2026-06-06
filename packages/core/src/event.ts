@@ -63,6 +63,13 @@ export type AgentEvent =
       question: QuestionPayload
     }
 
+  // ── 记忆提取 ──
+  | {
+      type: 'memory_extracted'
+      turnId: string
+      count: number
+    }
+
   // ── 安全/系统事件 ──
   | {
       type: 'loop_detected'
@@ -73,7 +80,11 @@ export type AgentEvent =
       type: 'context_compressed'
       turnId: string
       before: number
+      beforeTokens?: number
+      afterTokens?: number
       after: number
+      compressionType: 'auto' | 'manual'
+      prunedToolResults?: number
     }
   | { type: 'error'; turnId: string; code: string; message: string }
 

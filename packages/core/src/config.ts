@@ -21,8 +21,12 @@ export interface LLMProviderConfig {
 export interface AgentConfig {
   systemPrompt: string
   maxSteps: number
-  sessionTimeoutMs: number
+  runTimeoutMs: number
   maxContextTokens: number
+  autoMemoryExtraction?: boolean
+  contextCompressionThreshold?: number
+  maxToolResultLength?: number
+  minCompressionInterval?: number
 }
 
 export interface MCPServerStdioConfig {

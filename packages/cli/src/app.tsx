@@ -6,7 +6,7 @@ import { Box, Text, useInput, useStderr } from 'ink'
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import type { JSX } from 'react'
 import { execSync } from 'node:child_process'
-import { Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool, MCPClientManager, scanSkills, addProvider, FileSessionStore } from '@my-agent/core'
+import { Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool, memoryTool, MCPClientManager, scanSkills, addProvider, FileSessionStore, FileMemoryStore } from '@my-agent/core'
 import type { LLMProviderConfig, MCPServerStatus, SkillInfo } from '@my-agent/core'
 import { useAgentStream } from './hooks/use-agent-stream.js'
 import type { ViewEvent } from './hooks/use-agent-stream.js'
@@ -22,8 +22,9 @@ import { QuestionPanel } from './components/question-panel.js'
 import { UnknownCmdPanel } from './components/unknown-cmd-panel.js'
 import { EventStream } from './components/event-stream.js'
 
-const COMMANDS = ['/connect', '/exit', '/mcps', '/models', '/new', '/q', '/resume', '/skills'] as const
-const PKG_VERSION = '0.0.1'
+const COMMANDS = ['/compact', '/connect', '/exit', '/forget', '/mcps', '/memory', '/models', '/new', '/q', '/remember', '/resume', '/skills'] as const
+import pkg from '../package.json' with { type: 'json' }
+const PKG_VERSION = pkg.version
 
 type ProviderEntry = [name: string, config: LLMProviderConfig]
 
@@ -41,6 +42,7 @@ SHARED_TOOLS.register(grepTool)
 SHARED_TOOLS.register(globTool)
 SHARED_TOOLS.register(questionTool)
 SHARED_TOOLS.register(todowriteTool)
+SHARED_TOOLS.register(memoryTool)
 
 const SESSION_STORE = new FileSessionStore(`${process.cwd()}/.mycode/sessions`)
 
@@ -67,8 +69,10 @@ function createAgent(providerName: string, preScannedSkills?: SkillInfo[], resum
     tools: SHARED_TOOLS,
     systemPrompt: config.agent.systemPrompt,
     maxSteps: config.agent.maxSteps,
-    sessionTimeoutMs: config.agent.sessionTimeoutMs,
+    runTimeoutMs: config.agent.runTimeoutMs,
     maxContextTokens: config.agent.maxContextTokens,
+    autoMemoryExtraction: config.agent.autoMemoryExtraction,
+    contextCompressionThreshold: config.agent.contextCompressionThreshold,
     skillsConfig: config.skills,
     skills: preScannedSkills,
     projectRoot: process.cwd(),
@@ -80,10 +84,13 @@ function createAgent(providerName: string, preScannedSkills?: SkillInfo[], resum
 const COMMAND_HELP: Record<string, string> = {
   '/connect': '连接新模型',
   '/exit': '退出',
+  '/forget': '删除记忆（按 ID）',
   '/mcps': 'MCP 服务器状态',
+  '/memory': '记忆管理（全局/项目）',
   '/models': '切换模型',
   '/new': '开始新对话',
   '/q': '退出（快捷）',
+  '/remember': '存入记忆',
   '/resume': '恢复历史会话',
   '/skills': '查看可用技能',
 }
@@ -124,7 +131,13 @@ interface AppProps {
 
 export default function App({ continueSessionId }: AppProps): JSX.Element {
   const [input, setInput] = useState('')
+  const [cursorIndex, setCursorIndex] = useState(0)
   const [selectedIdx, setSelectedIdx] = useState(0)
+
+  const clearInput = useCallback(() => {
+    setInput('')
+    setCursorIndex(0)
+  }, [])
   const [showModelSelect, setShowModelSelect] = useState(false)
   const [modelSelectIdx, setModelSelectIdx] = useState(0)
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
@@ -143,6 +156,7 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
   const [showResumeList, setShowResumeList] = useState(false)
   const [resumeList, setResumeList] = useState<Array<{ sessionId: string; messageCount: number; updatedAt: string }>>([])
   const [resumeSelectIdx, setResumeSelectIdx] = useState(0)
+  const [statusMsg, setStatusMsg] = useState<{ text: string; color: string } | null>(null)
   const { events, isRunning, error, run, reset, addUserMessage, addHistoryEvents, pendingQuestion, answerQuestion } = useAgentStream()
   const agentRef = useRef<Agent | null>(null)
   const { stderr } = useStderr()
@@ -275,7 +289,23 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
           const agent = createAgent(activeProvider, skills, selected.sessionId)
           agentRef.current = agent
           setShowResumeList(false)
-          setInput('')
+          clearInput()
+          // Load and display historical messages
+          SESSION_STORE.load(selected.sessionId).then(msgs => {
+            if (msgs && msgs.length > 0) {
+              const historyEvents: ViewEvent[] = []
+              for (const msg of msgs) {
+                if (msg.role === 'user') {
+                  historyEvents.push({ type: 'user_message', content: msg.content })
+                } else if (msg.role === 'assistant') {
+                  historyEvents.push({ type: 'answer_start', turnId: `history-${Date.now()}` })
+                  historyEvents.push({ type: 'answer_delta', turnId: `history-${Date.now()}`, delta: msg.content })
+                  historyEvents.push({ type: 'answer_end', turnId: `history-${Date.now()}`, fullText: msg.content })
+                }
+              }
+              addHistoryEvents(historyEvents)
+            }
+          })
         }
         return
       }
@@ -294,7 +324,7 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
     if (pendingQuestion) {
       if (key.escape) {
         answerQuestion([])
-        setInput('')
+        clearInput()
         return
       }
       if (key.return && input.trim()) {
@@ -303,19 +333,29 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
           const idx = parseInt(trimmed, 10) - 1
           if (idx >= 0 && idx < pendingQuestion.options.length) {
             answerQuestion([pendingQuestion.options[idx]!.label])
-            setInput('')
+            clearInput()
           }
           return
         }
         answerQuestion([trimmed])
-        setInput('')
+        clearInput()
         return
       }
       if (key.backspace) {
-        setInput(prev => prev.slice(0, -1))
+        setInput(prev => prev.slice(0, cursorIndex - 1) + prev.slice(cursorIndex))
+        setCursorIndex(prev => Math.max(0, prev - 1))
         return
       }
-      setInput(prev => prev + _input)
+      if (key.leftArrow) {
+        setCursorIndex(prev => Math.max(0, prev - 1))
+        return
+      }
+      if (key.rightArrow) {
+        setCursorIndex(prev => Math.min(input.length, prev + 1))
+        return
+      }
+      setInput(prev => prev.slice(0, cursorIndex) + _input + prev.slice(cursorIndex))
+      setCursorIndex(prev => prev + _input.length)
       setSelectedIdx(0)
       return
     }
@@ -324,13 +364,13 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
       if (connectStep === 'done') {
         setConnectStep(null)
         setConnectConfig({})
-        setInput('')
+        clearInput()
         return
       }
       if (key.escape) {
         setConnectStep(null)
         setConnectConfig({})
-        setInput('')
+        clearInput()
         return
       }
       if (connectStep === 'format') {
@@ -347,7 +387,7 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
           setConnectConfig(prev => ({ ...prev, format }))
           setConnectStep('url')
           setConnectSelectIdx(0)
-          setInput('')
+          clearInput()
           return
         }
         return
@@ -357,19 +397,19 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
         if (connectStep === 'url') {
           setConnectConfig(prev => ({ ...prev, baseUrl: trimmed }))
           setConnectStep('model')
-          setInput('')
+          clearInput()
           return
         }
         if (connectStep === 'model') {
           setConnectConfig(prev => ({ ...prev, model: trimmed }))
           setConnectStep('apikey')
-          setInput('')
+          clearInput()
           return
         }
         if (connectStep === 'apikey') {
           setConnectConfig(prev => ({ ...prev, apiKey: trimmed }))
           setConnectStep('name')
-          setInput('')
+          clearInput()
           return
         }
         if (connectStep === 'name') {
@@ -391,16 +431,26 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
             setConnectConfig(prev => ({ ...prev, providerName: `错误: ${msg}` }))
             setConnectStep('done')
           }
-          setInput('')
+          clearInput()
           return
         }
         return
       }
       if (key.backspace) {
-        setInput(prev => prev.slice(0, -1))
+        setInput(prev => prev.slice(0, cursorIndex - 1) + prev.slice(cursorIndex))
+        setCursorIndex(prev => Math.max(0, prev - 1))
         return
       }
-      setInput(prev => prev + _input)
+      if (key.leftArrow) {
+        setCursorIndex(prev => Math.max(0, prev - 1))
+        return
+      }
+      if (key.rightArrow) {
+        setCursorIndex(prev => Math.min(input.length, prev + 1))
+        return
+      }
+      setInput(prev => prev.slice(0, cursorIndex) + _input + prev.slice(cursorIndex))
+      setCursorIndex(prev => prev + _input.length)
       return
     }
 
@@ -419,11 +469,11 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
     }
     if (key.escape) {
       if (input.startsWith('/') && matches.length > 0) {
-        setInput('')
+        clearInput()
         return
       }
       reset()
-      setInput('')
+      clearInput()
       agentRef.current = null
       setSelectedProvider(null)
       return
@@ -458,7 +508,7 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
             })
           }
         }
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed === '/exit' || trimmed === '/q') {
@@ -472,7 +522,28 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
       if (trimmed === '/new') {
         reset()
         agentRef.current = null
-        setInput('')
+        clearInput()
+        return
+      }
+      if (trimmed === '/compact') {
+        const agent = agentRef.current
+        if (agent) {
+          agent.compactMessages().then(result => {
+            if (result) {
+              const tokensSaved = result.beforeTokens - result.afterTokens
+              const tokensInfo = tokensSaved > 0 ? `，节省 ${tokensSaved < 1000 ? `${tokensSaved}` : `${(tokensSaved / 1000).toFixed(1)}K`} tokens` : ''
+              const msg = `压缩完成：${result.before} → ${result.after} 条消息${tokensInfo}` +
+                (result.prunedToolResults ? `，裁剪了 ${result.prunedToolResults} 个工具结果` : '')
+              setStatusMsg({ text: msg, color: 'green' })
+            } else {
+              setStatusMsg({ text: '上下文无需压缩', color: 'yellow' })
+            }
+            setContextUsage(agent.getContextUsage())
+          })
+        } else {
+          setStatusMsg({ text: '没有活跃的 Agent 会话', color: 'yellow' })
+        }
+        clearInput()
         return
       }
       if (trimmed === '/resume') {
@@ -481,30 +552,115 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
           setShowResumeList(true)
           setResumeSelectIdx(0)
         })
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed === '/models') {
         setShowModelSelect(true)
         setModelSelectIdx(0)
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed === '/mcps') {
         setShowMcpList(true)
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed === '/skills') {
         setShowSkillsList(true)
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed === '/connect') {
         setConnectStep('format')
         setConnectConfig({})
         setConnectSelectIdx(0)
-        setInput('')
+        clearInput()
+        return
+      }
+      if (trimmed.startsWith('/remember ')) {
+        const content = trimmed.slice('/remember '.length).trim()
+        if (content) {
+          const store = new FileMemoryStore('project', process.cwd())
+          const result = store.add({ type: 'fact', content, tags: [] })
+          if (result.error) {
+            setStatusMsg({ text: `记忆存储失败: ${result.error}`, color: 'red' })
+          } else {
+            setStatusMsg({ text: `已记住: ${content.slice(0, 60)}`, color: 'green' })
+          }
+        }
+        clearInput()
+        return
+      }
+      if (trimmed === '/forget') {
+        const store = new FileMemoryStore('project', process.cwd())
+        const entries = store.list()
+        if (entries.length === 0) {
+          setStatusMsg({ text: '暂无记忆可删除', color: 'yellow' })
+        } else {
+          const summary = entries
+            .slice(0, 20)
+            .map((e, i) => `${i + 1}. [${e.id.slice(0, 8)}] [${e.type}] ${e.content.slice(0, 60)}`)
+            .join('\n')
+          setUnknownCmd(`记忆列表（输入 /forget <id> 删除）：\n${summary}`)
+        }
+        clearInput()
+        return
+      }
+      if (trimmed.startsWith('/forget ')) {
+        const idPart = trimmed.slice('/forget '.length).trim()
+        if (idPart) {
+          const store = new FileMemoryStore('project', process.cwd())
+          const result = store.delete(idPart)
+          if (result.found) {
+            setStatusMsg({ text: `已删除记忆: ${idPart.slice(0, 8)}...`, color: 'green' })
+          } else {
+            setStatusMsg({ text: `未找到记忆: ${idPart.slice(0, 8)}...`, color: 'red' })
+          }
+        }
+        clearInput()
+        return
+      }
+      if (trimmed === '/memory') {
+        const projectStore = new FileMemoryStore('project', process.cwd())
+        const globalStore = new FileMemoryStore('global')
+        const projectEntries = projectStore.list()
+        const globalEntries = globalStore.list()
+        const lines: string[] = []
+        if (projectEntries.length > 0) {
+          lines.push(`--- 项目记忆 (${projectEntries.length} 条) ---`)
+          projectEntries.slice(0, 10).forEach((e, i) => {
+            lines.push(`${i + 1}. [${e.type}] ${e.content.slice(0, 80)}`)
+          })
+        }
+        if (globalEntries.length > 0) {
+          lines.push(`--- 全局记忆 (${globalEntries.length} 条) ---`)
+          globalEntries.slice(0, 10).forEach((e, i) => {
+            lines.push(`${i + 1}. [${e.type}] ${e.content.slice(0, 80)}`)
+          })
+        }
+        if (lines.length === 0) {
+          setStatusMsg({ text: '暂无记忆。使用 /remember <内容> 存入。', color: 'yellow' })
+        } else {
+          lines.push('')
+          lines.push('使用 /remember <内容> 存入项目记忆，/memory-global <内容> 存入全局记忆')
+          setUnknownCmd(lines.join('\n'))
+        }
+        clearInput()
+        return
+      }
+      if (trimmed.startsWith('/memory-global ')) {
+        const content = trimmed.slice('/memory-global '.length).trim()
+        if (content) {
+          const store = new FileMemoryStore('global')
+          const result = store.add({ type: 'fact', content, tags: [] })
+          if (result.error) {
+            setStatusMsg({ text: `全局记忆存储失败: ${result.error}`, color: 'red' })
+          } else {
+            setStatusMsg({ text: `已存入全局记忆: ${content.slice(0, 60)}`, color: 'green' })
+          }
+        }
+        clearInput()
         return
       }
       // Check if input matches a skill command (/skill-name)
@@ -525,12 +681,12 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
           : skillDescription
         addUserMessage(userMsg)
         run(userMsg, agent)
-        setInput('')
+        clearInput()
         return
       }
       if (trimmed.startsWith('/')) {
         setUnknownCmd(trimmed)
-        setInput('')
+        clearInput()
         return
       }
       if (!agentRef.current) {
@@ -538,7 +694,7 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
       }
       addUserMessage(input.trim())
       run(input.trim(), agentRef.current)
-      setInput('')
+      clearInput()
       return
     }
     if ((key.tab && !key.shift) || key.downArrow) {
@@ -553,11 +709,33 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
       }
       return
     }
-    if (key.backspace) {
-      setInput(prev => prev.slice(0, -1))
+    if (key.leftArrow) {
+      setCursorIndex(prev => Math.max(0, prev - 1))
       return
     }
-    setInput(prev => prev + _input)
+    if (key.rightArrow) {
+      setCursorIndex(prev => Math.min(input.length, prev + 1))
+      return
+    }
+    if (key.home) {
+      setCursorIndex(0)
+      return
+    }
+    if (key.end) {
+      setCursorIndex(input.length)
+      return
+    }
+    if (key.backspace) {
+      setInput(prev => prev.slice(0, cursorIndex - 1) + prev.slice(cursorIndex))
+      setCursorIndex(prev => Math.max(0, prev - 1))
+      return
+    }
+    if (key.delete) {
+      setInput(prev => prev.slice(0, cursorIndex) + prev.slice(cursorIndex + 1))
+      return
+    }
+    setInput(prev => prev.slice(0, cursorIndex) + _input + prev.slice(cursorIndex))
+    setCursorIndex(prev => prev + _input.length)
     setSelectedIdx(0)
   })
 
@@ -595,6 +773,11 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
         : <EventStream events={events} isRunning={isRunning} />}
       </Box>
 
+      {statusMsg && (
+        <Box marginTop={1}>
+          <Text color={statusMsg.color as any}>{statusMsg.text}</Text>
+        </Box>
+      )}
       {!showModelSelect && matches.length > 0 && (
         <Box flexDirection="column" borderStyle="round" borderColor="gray" marginTop={1} paddingX={1}>
           {matches.map((cmd, i) => (
@@ -606,8 +789,15 @@ export default function App({ continueSessionId }: AppProps): JSX.Element {
       )}
       <Box marginTop={1}>
         <Text bold>&gt; </Text>
-        <Text>{input}</Text>
-        {!isRunning && <Text color="yellow">▌</Text>}
+        {!isRunning ? (
+          <>
+            <Text>{input.slice(0, cursorIndex)}</Text>
+            <Text inverse color="yellow">{input[cursorIndex] || ' '}</Text>
+            <Text>{input.slice(cursorIndex + 1)}</Text>
+          </>
+        ) : (
+          <Text>{input}</Text>
+        )}
       </Box>
 
       <StatusBar providerName={activeProvider} model="" isRunning={isRunning} eventCount={events.length} error={error} contextUsage={contextUsage} />
