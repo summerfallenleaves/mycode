@@ -15,6 +15,8 @@ export { createAdapter } from './llm/adapter.js'
 export { ToolRegistry } from './tools/registry.js'
 export type { Tool, ToolContext, ToolEvent, ToolResult, QuestionPayload, QuestionOption } from './tools/registry.js'
 export { readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool } from './tools/builtin/index.js'
+export { getTodoPath, readTodos } from './tools/builtin/todowrite.js'
+export type { TodoItem } from './tools/builtin/todowrite.js'
 
 export { SessionContext } from './session/context.js'
 export type { Message } from './session/context.js'

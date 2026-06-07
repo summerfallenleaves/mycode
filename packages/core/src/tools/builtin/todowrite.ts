@@ -31,14 +31,14 @@ function findProjectRoot(): string {
   return process.cwd()
 }
 
-function getTodoPath(sessionDir?: string): string {
+export function getTodoPath(sessionDir?: string): string {
   if (sessionDir) {
     return resolve(sessionDir, TODO_FILE)
   }
   return resolve(findProjectRoot(), '.mycode', TODO_FILE)
 }
 
-function readTodos(sessionDir?: string): TodoItem[] {
+export function readTodos(sessionDir?: string): TodoItem[] {
   const path = getTodoPath(sessionDir)
   if (!existsSync(path)) return []
   try {

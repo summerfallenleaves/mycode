@@ -485,6 +485,10 @@ ${conversationText}
     return this.sessionId
   }
 
+  getSessionDir(): string | null {
+    return this.sessionDir
+  }
+
   getMessages(): readonly LLMMessage[] {
     return this.messages
   }
