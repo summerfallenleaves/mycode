@@ -73,8 +73,8 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
           abortSignal: params.signal,
         })
 
-        // Extract response messages in parallel with stream consumption
-        const responsePromise = result.response.then((res: any) => {
+        let hasOutput = false
+        const responsePromise = Promise.resolve(result.response).then((res: any) => {
           const msgs: Array<LLMMessage> = []
           for (const raw of res.messages ?? []) {
             if (raw.role === 'assistant') {
@@ -93,22 +93,32 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
             }
           }
           return msgs
-        })
+        }).catch(() => [] as Array<LLMMessage>)
 
-        for await (const chunk of result.fullStream) {
-          switch (chunk.type) {
-            case 'text-delta':
-              yield { type: 'text-delta', delta: chunk.text }
-              break
-            case 'tool-call':
-              yield { type: 'tool-start', toolName: chunk.toolName, args: chunk.input }
-              break
-            case 'tool-result':
-              yield { type: 'tool-end', toolName: chunk.toolName, result: chunk.output }
-              break
-            case 'error':
-              throw new Error((chunk.error as Error).message)
+        try {
+          for await (const chunk of result.fullStream) {
+            switch (chunk.type) {
+              case 'text-delta':
+                hasOutput = true
+                yield { type: 'text-delta', delta: chunk.text }
+                break
+              case 'tool-call':
+                hasOutput = true
+                yield { type: 'tool-start', toolName: chunk.toolName, args: chunk.input }
+                break
+              case 'tool-result':
+                hasOutput = true
+                yield { type: 'tool-end', toolName: chunk.toolName, result: chunk.output }
+                break
+              case 'error':
+                throw new Error((chunk.error as Error).message)
+            }
           }
+        } catch (err) {
+          if (!hasOutput && err instanceof Error && err.name === 'AI_NoOutputGeneratedError') {
+            yield { type: 'text-delta', delta: '（API 返回了空响应，请重试）' }
+          }
+          throw err
         }
 
         resolveMessages(await responsePromise)
