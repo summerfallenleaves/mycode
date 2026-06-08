@@ -9,6 +9,7 @@ import {
   Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool,
   bashTool, grepTool, globTool, questionTool, todowriteTool, memoryTool,
   MCPClientManager, scanSkills, addProvider, FileSessionStore, FileMemoryStore, readTodos,
+  appendRule,
 } from '@my-agent/core'
 import type { LLMProviderConfig, MCPServerStatus, SkillInfo, TodoItem, QuestionPayload } from '@my-agent/core'
 import { AgentStreamManager } from './lib/agent-stream-manager.js'
@@ -221,17 +222,16 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
   }
 
   function update(): void {
-    screen.program.flush()
-    process.stdout.write('\x1b[H')
-    screen.program.x = 0
-    screen.program.y = 0
     renderContentArea()
     renderInputLine()
     renderStatusBarLine()
     if (sidebarBox) renderSidebarBox()
     screen.render()
-    setImmediate(positionCursorForIme)
   }
+
+  // 在 blessed draw() 完成后同步定位光标到输入框，
+  // 避免 sc/rc 恢复到错误位置或 setImmediate 与高频 update() 竞态。
+  screen.on('render', positionCursorForIme)
 
   function renderContentArea(): void {
     const maxTurns = Math.max(2, Math.floor((layout.realRows - 10) / 4))
@@ -279,8 +279,8 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       content += `\n${renderAutoComplete(matches, s.selectedIdx)}`
     }
 
-    contentArea.setContent('')
     contentArea.setContent(`${titleLine}\n${content}`)
+    contentArea.setScrollPerc(100)
   }
 
   function renderInputLine(): void {
@@ -737,10 +737,10 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     // Exit
     if (submitInput === '/exit' || submitInput === '/q') {
       const sessionId = agent?.getSessionId()
-      if (sessionId) {
-        process.stderr.write(`\n恢复会话：mycode -c ${sessionId}\n`)
-      }
       screen.destroy()
+      if (sessionId) {
+        process.stdout.write(`\n恢复会话：mycode -c ${sessionId}\n`)
+      }
       process.exit(0)
       return
     }
@@ -820,20 +820,33 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
 
     if (submitInput.startsWith('/remember ')) {
       const content = submitInput.slice('/remember '.length).trim()
-      if (content) {
-        const store = new FileMemoryStore('project', process.cwd())
-        const result = store.add({ type: 'fact', content, tags: [] })
-        s.statusMsg = result.error
-          ? { text: `记忆存储失败: ${result.error}`, color: 'red' }
-          : { text: `已记住: ${content.slice(0, 60)}`, color: 'green' }
+      if (!content) { clearInput(); update(); return }
+      const sessionDir = agent?.getSessionDir()
+      if (!sessionDir) {
+        s.statusMsg = { text: '请先开始一次对话再使用 /remember', color: 'yellow' }
+        clearInput()
+        update()
+        return
       }
+      const store = new FileMemoryStore(sessionDir)
+      const result = store.add({ type: 'fact', content, tags: [] })
+      s.statusMsg = result.error
+        ? { text: `记忆存储失败: ${result.error}`, color: 'red' }
+        : { text: `已记住: ${content.slice(0, 60)}`, color: 'green' }
       clearInput()
       update()
       return
     }
 
     if (submitInput === '/forget') {
-      const store = new FileMemoryStore('project', process.cwd())
+      const sessionDir = agent?.getSessionDir()
+      if (!sessionDir) {
+        s.statusMsg = { text: '请先开始一次对话再使用 /forget', color: 'yellow' }
+        clearInput()
+        update()
+        return
+      }
+      const store = new FileMemoryStore(sessionDir)
       const entries = store.list()
       if (entries.length === 0) {
         s.statusMsg = { text: '暂无记忆可删除', color: 'yellow' }
@@ -849,7 +862,14 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (submitInput.startsWith('/forget ')) {
       const idPart = submitInput.slice('/forget '.length).trim()
       if (idPart) {
-        const store = new FileMemoryStore('project', process.cwd())
+        const sessionDir = agent?.getSessionDir()
+        if (!sessionDir) {
+          s.statusMsg = { text: '请先开始一次对话再使用 /forget', color: 'yellow' }
+          clearInput()
+          update()
+          return
+        }
+        const store = new FileMemoryStore(sessionDir)
         const result = store.delete(idPart)
         s.statusMsg = result.found
           ? { text: `已删除记忆: ${idPart.slice(0, 8)}...`, color: 'green' }
@@ -861,20 +881,19 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     }
 
     if (submitInput === '/memory') {
-      const projectStore = new FileMemoryStore('project', process.cwd())
-      const globalStore = new FileMemoryStore('global')
-      const projectEntries = projectStore.list()
-      const globalEntries = globalStore.list()
-      const lines: string[] = []
-      if (projectEntries.length > 0) {
-        lines.push(`--- 项目记忆 (${projectEntries.length} 条) ---`)
-        projectEntries.slice(0, 10).forEach((e, i) => {
-          lines.push(`${i + 1}. [${e.type}] ${e.content.slice(0, 80)}`)
-        })
+      const sessionDir = agent?.getSessionDir()
+      if (!sessionDir) {
+        s.statusMsg = { text: '请先开始一次对话再使用 /memory', color: 'yellow' }
+        clearInput()
+        update()
+        return
       }
-      if (globalEntries.length > 0) {
-        lines.push(`--- 全局记忆 (${globalEntries.length} 条) ---`)
-        globalEntries.slice(0, 10).forEach((e, i) => {
+      const store = new FileMemoryStore(sessionDir)
+      const entries = store.list()
+      const lines: string[] = []
+      if (entries.length > 0) {
+        lines.push(`--- 当前会话记忆 (${entries.length} 条) ---`)
+        entries.slice(0, 10).forEach((e, i) => {
           lines.push(`${i + 1}. [${e.type}] ${e.content.slice(0, 80)}`)
         })
       }
@@ -882,7 +901,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
         s.statusMsg = { text: '暂无记忆。使用 /remember <内容> 存入。', color: 'yellow' }
       } else {
         lines.push('')
-        lines.push('使用 /remember <内容> 存入项目记忆，/memory-global <内容> 存入全局记忆')
+        lines.push('使用 /remember <内容> 存入会话记忆，/rule <内容> 存入项目规则')
         s.unknownCmd = lines.join('\n')
       }
       clearInput()
@@ -890,17 +909,53 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       return
     }
 
-    if (submitInput.startsWith('/memory-global ')) {
-      const content = submitInput.slice('/memory-global '.length).trim()
+    if (submitInput.startsWith('/rule ')) {
+      const content = submitInput.slice('/rule '.length).trim()
       if (content) {
-        const store = new FileMemoryStore('global')
-        const result = store.add({ type: 'fact', content, tags: [] })
+        const result = appendRule('project', process.cwd(), { type: 'convention', content })
         s.statusMsg = result.error
-          ? { text: `全局记忆存储失败: ${result.error}`, color: 'red' }
-          : { text: `已存入全局记忆: ${content.slice(0, 60)}`, color: 'green' }
+          ? { text: `规则存储失败: ${result.error}`, color: 'red' }
+          : { text: `已存入项目规则: ${content.slice(0, 60)}`, color: 'green' }
       }
       clearInput()
       update()
+      return
+    }
+
+    if (submitInput === '/init') {
+      if (!s.activeProvider) {
+        s.statusMsg = { text: '请先配置 LLM Provider', color: 'yellow' }
+        clearInput()
+        update()
+        return
+      }
+      const initPrompt = `分析当前代码库，生成或增量更新项目根目录的 AGENTS.md 文件。
+
+AGENTS.md 是给 AI 编码助手的项目规则文件，每次会话启动时自动注入。它应该简洁（200 行以内），只包含 AI 无法自行推断的项目特有信息。
+
+需要覆盖的章节：
+1. 项目指南 — 项目类型、技术栈、monorepo 结构、默认分支等
+2. 常用命令 — 构建、测试、lint、开发模式等（给出具体命令，用表格展示）
+3. 风格指南 — 代码风格约定（只写与语言默认不同的部分，给出正确和错误示例）
+4. 目录结构 — 简要的目录说明（仅列出核心目录和每个目录的职责）
+
+排除的内容：
+- 依赖列表（AI 可以自己读 package.json）
+- 语言标准约定（AI 已知的标准实践）
+- 显而易见的配置
+
+分析数据源：根目录和各包的 package.json、tsconfig.json、lint/format 配置文件（如 biome.json、.eslintrc）、README.md、已有的 AGENTS.md。如果有其他 AI 工具的规则文件（如 .cursorrules、.cursor/rules/、CLAUDE.md），也整合进来。
+
+如果 AGENTS.md 已存在，阅读现有内容，保留所有人工编写的自定义规则，只补充缺失或修正过时的内容。不要删除任何现有章节。
+
+完成后使用 write 工具将内容写入项目根目录的 AGENTS.md。`
+
+      if (!agent) {
+        agent = createAgent(s.activeProvider, s.skills)
+      }
+      streamManager.addUserMessage('/init')
+      clearInput()
+      streamManager.run(initPrompt, agent)
       return
     }
 

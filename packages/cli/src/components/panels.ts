@@ -23,18 +23,20 @@ export interface ConnectConfig {
   providerName?: string
 }
 
-export const COMMANDS = ['/compact', '/connect', '/exit', '/forget', '/mcps', '/memory', '/models', '/new', '/q', '/remember', '/resume', '/skills'] as const
+export const COMMANDS = ['/compact', '/connect', '/exit', '/forget', '/init', '/mcps', '/memory', '/models', '/new', '/q', '/remember', '/resume', '/rule', '/skills'] as const
 export const COMMAND_HELP: Record<string, string> = {
   '/connect': '连接新模型',
   '/exit': '退出',
-  '/forget': '删除记忆（按 ID）',
+  '/forget': '删除会话记忆（按 ID）',
+  '/init': '生成或更新项目 AGENTS.md',
   '/mcps': 'MCP 服务器状态',
-  '/memory': '记忆管理（全局/项目）',
+  '/memory': '查看当前会话记忆',
   '/models': '切换模型',
   '/new': '开始新对话',
   '/q': '退出（快捷）',
-  '/remember': '存入记忆',
+  '/remember': '存入会话记忆',
   '/resume': '恢复历史会话',
+  '/rule': '存入项目规则（MYCODE.md）',
   '/skills': '查看可用技能',
 }
 
