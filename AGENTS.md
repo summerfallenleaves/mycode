@@ -248,12 +248,10 @@ pnpm publish -r --access public     # 发布所有公开包
   mycode.jsonc      # Agent 配置（LLM / MCP / 技能 / 安全）
   skills/           # 技能文件（运行时发现）
   sessions/         # 会话持久化（JSON 文件）
-  memory/           # Project Memory 存储（phase1c+）
 packages/
   core/     # Agent 核心逻辑（纯 TS，零 UI 依赖）
     src/
-      memory/       # Memory 系统（manager/extractor/compressor/types）
-      runtime/      # 运行时组件（session-store, memory-store）
+      memory/       # Memory 系统（store/types/mycode-md）
   cli/      # Ink 终端界面
   web/      # Next.js Web 应用
   shared/   # 共享类型和工具函数
@@ -274,10 +272,10 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 
 ## Memory 系统操作约定
 
-- **MYCODE.md**（人工规则）：放置于 `~/.mycode/MYCODE.md`（全局）和项目根 `./MYCODE.md`（项目级），合并为 `## Project Rules` 注入 system prompt。用于静态、长期不变的约定。
+- **MYCODE.md**（共享规则）：放置于 `~/.mycode/MYCODE.md`（全局）和 `.mycode/MYCODE.md`（项目级），合并为 `## Project Rules` 注入 system prompt。用于跨会话共享的持久规则和约定。Agent 可通过 `memoryTool` 的 `rule` action 或 CLI `/rule` 命令追加规则。MYCODE.md **不受** `/memory` 和 `/forget` 命令管理。
 - **会话持久化**（动态回溯）：通过 `FileSessionStore` 自动保存到 `.mycode/sessions/<sessionId>/messages.json`。每次 run 结束后自动触发，无需手动干预。
-- **Project Memory**（结构化记忆）：通过 `memoryTool`（search/add/list）或 CLI 命令（`/remember` `/forget`）操作。记忆存储于 `.mycode/memory/memory.json`（project 级）和 `~/.mycode/memory/memory.json`（global 级）。自动注入到 system prompt（前 4000 字符）。
-- **注入顺序**（由前到后覆盖）：`systemPrompt` → `MYCODE.md` → `memory context` → `skillPrompt`
+- **会话记忆**（Session Memory）：通过 `memoryTool`（add/search/list）或 CLI 命令（`/remember` `/forget`）操作。记忆存储于 `.mycode/sessions/<sessionId>/memory.json`，仅属于当前会话。恢复会话时自动注入到 system prompt（`## Session Memory` 段，前 4000 字符）。`/memory` 和 `/forget` 命令**只能管理当前会话的记忆**。
+- **注入顺序**（由前到后覆盖）：`systemPrompt` → `MYCODE.md` → `session memory`（恢复会话时） → `skillPrompt`
 - **记忆类型**（5 种）：`convention`（规范）、`decision`（决策）、`fact`（事实）、`preference`（偏好）、`lesson`（经验教训）
 - **内容过滤器**：Memory 写入时自动拒绝密钥格式（sk-、AKIA、ghp_ 等），避免敏感信息泄漏
 - **Memory 文件版本化**：`MemoryFile` 包含 `version: 1` 字段，便于未来迁移
@@ -291,6 +289,26 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 - **手动压缩**：CLI 输入 `/compact` 可绕过冷却期手动触发完整压缩流程，结果在状态栏显示。
 - **压缩事件**：`context_compressed` 事件携带 `before`/`after`（消息条数）、`beforeTokens`/`afterTokens`（估算 token）、`compressionType`（auto/manual）、`prunedToolResults` 字段。`before`/`after` 为必填保持向后兼容。
 
+
+## CLI 命令列表
+
+用户在输入框中以 `/` 开头的命令会触发特定功能，支持按字母序自动补全筛选。技能文件注册的命令（如 `/skill-name`）也会出现在补全列表中。
+
+| 命令 | 功能 |
+|---|---|
+| `/compact` | 手动触发上下文压缩，绕过冷却期。压缩后状态栏显示消息条数变化和节省的 token 数 |
+| `/connect` | 交互式连接新的 LLM Provider，依次选择格式（openai/anthropic）、输入名称、Base URL、API Key、模型名 |
+| `/exit` `/q` | 退出 mycode。如果当前会话有对话记录，退出后在终端显示恢复命令 `mycode -c <sessionId>` |
+| `/forget` | 列出当前会话的所有记忆条目（带 ID 和类型），输入 `/forget <id>` 删除指定条目 |
+| `/init` | 分析代码库并生成或增量更新项目根目录的 `AGENTS.md`。Agent 自主扫描配置文件、目录结构、编码规范后写入 |
+| `/mcps` | 显示已配置的 MCP 服务器列表及连接状态 |
+| `/memory` | 显示当前会话记忆列表（类型、内容摘要） |
+| `/models` | 打开模型选择面板，切换当前使用的 LLM Provider |
+| `/new` | 重置当前会话，清空对话历史和 Agent 实例 |
+| `/remember <内容>` | 将内容以 `fact` 类型存入当前会话的 memory.json |
+| `/resume` | 打开历史会话列表面板，选择后恢复该会话的对话历史 |
+| `/rule <内容>` | 将内容以 `convention` 类型追加到项目的 `.mycode/MYCODE.md`，作为跨会话共享的项目规则 |
+| `/skills` | 显示已扫描到的技能列表（名称、描述、来源路径） |
 
 ## GitHub提交规则
 
