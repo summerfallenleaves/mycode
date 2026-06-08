@@ -1,18 +1,15 @@
+/**
+ * @fileoverview Session-scoped file-based memory store with search scoring and context formatting
+ * @module @my-agent/core/memory/store
+ */
+
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import type { MemoryEntry, MemoryFile, MemoryType, MemoryScope } from './types.js'
+import type { MemoryEntry, MemoryFile, MemoryType } from './types.js'
 import { MAX_ENTRIES, MAX_ENTRY_LENGTH, MAX_SEARCH_RESULTS, MEMORY_CONTEXT_MAX_CHARS } from './types.js'
 
 const MEMORY_FILE = 'memory.json'
-
-export function getMemoryDir(scope: MemoryScope, projectRoot?: string): string {
-  if (scope === 'global') {
-    return resolve(homedir(), '.mycode', 'memory')
-  }
-  return resolve(projectRoot ?? process.cwd(), '.mycode', 'memory')
-}
 
 function formatTimestamp(): string {
   const d = new Date()
@@ -25,12 +22,10 @@ function tokenize(text: string): string[] {
   const lower = text.toLowerCase()
   const tokens = new Set<string>()
 
-  // English words (split on non-alphanumeric)
   for (const word of lower.split(/[^a-z0-9]+/)) {
     if (word.length >= 2) tokens.add(word)
   }
 
-  // Chinese character bigrams (sliding window of 2)
   const chineseChars = lower.replace(/[^\u4e00-\u9fff]/g, '')
   for (let i = 0; i < chineseChars.length - 1; i++) {
     tokens.add(chineseChars.slice(i, i + 2))
@@ -41,13 +36,10 @@ function tokenize(text: string): string[] {
 
 export class FileMemoryStore {
   private readonly filePath: string
-  readonly scope: MemoryScope
 
-  constructor(scope: MemoryScope, projectRoot?: string) {
-    this.scope = scope
-    const dir = getMemoryDir(scope, projectRoot)
-    mkdirSync(dir, { recursive: true })
-    this.filePath = resolve(dir, MEMORY_FILE)
+  constructor(sessionDir: string) {
+    mkdirSync(sessionDir, { recursive: true })
+    this.filePath = resolve(sessionDir, MEMORY_FILE)
   }
 
   private readFile(): MemoryFile {
@@ -99,7 +91,6 @@ export class FileMemoryStore {
       type: params.type,
       content,
       tags: params.tags ?? [],
-      scope: this.scope,
       createdAt: now,
       updatedAt: now,
       sourceSessionId: params.sourceSessionId,
@@ -122,7 +113,6 @@ export class FileMemoryStore {
       const q = params.query.toLowerCase()
       const queryTokens = tokenize(q)
 
-      // Score each entry by relevance
       const scored: Array<{ entry: MemoryEntry; score: number }> = []
 
       for (const entry of results) {
@@ -181,31 +171,19 @@ export class FileMemoryStore {
   }
 }
 
-export function formatMemoryContext(projectRoot: string): string {
-  const projectStore = new FileMemoryStore('project', projectRoot)
-  const globalStore = new FileMemoryStore('global')
+/** Format session memory entries as markdown for system prompt injection. Returns empty string if no entries. */
+export function formatMemoryContext(sessionDir: string): string {
+  if (!sessionDir) return ''
 
-  const projectEntries = projectStore.list()
-  const globalEntries = globalStore.list()
+  const store = new FileMemoryStore(sessionDir)
+  const entries = store.list()
 
-  const seenIds = new Set<string>()
-  const all: MemoryEntry[] = []
+  if (entries.length === 0) return ''
 
-  for (const e of [...projectEntries, ...globalEntries]) {
-    if (!seenIds.has(e.id)) {
-      seenIds.add(e.id)
-      all.push(e)
-    }
-  }
-
-  all.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-
-  if (all.length === 0) return ''
-
-  const lines: string[] = ['## Relevant Project Context']
+  const lines: string[] = ['## Session Memory']
   let charCount = 0
 
-  for (const entry of all) {
+  for (const entry of entries) {
     const line = `- [${entry.type}] ${entry.content}${entry.tags.length ? ` (${entry.tags.join(', ')})` : ''}`
     if (charCount + line.length + 1 > MEMORY_CONTEXT_MAX_CHARS) break
     lines.push(line)

@@ -34,9 +34,9 @@ export type { MycodeConfig, LLMProviderConfig, MCPServerConfig, SkillsConfig, Ag
 export { scanSkills, formatSkillPrompt } from './skill/index.js'
 export type { SkillInfo } from './skill/index.js'
 
-export { loadMycodeMd } from './memory/mycode-md.js'
-export { FileMemoryStore, formatMemoryContext, getMemoryDir } from './memory/store.js'
-export type { MemoryEntry, MemoryType, MemoryFile, MemoryScope } from './memory/types.js'
+export { loadMycodeMd, appendRule } from './memory/mycode-md.js'
+export { FileMemoryStore, formatMemoryContext } from './memory/store.js'
+export type { MemoryEntry, MemoryType, MemoryFile } from './memory/types.js'
 export { MEMORY_TYPES } from './memory/types.js'
 
 export { memoryTool } from './tools/builtin/memory.js'

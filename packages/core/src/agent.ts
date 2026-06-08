@@ -82,19 +82,8 @@ export class Agent {
     }
 
     const mycodeMdContent = loadMycodeMd(merged.projectRoot)
-    const memoryContext = formatMemoryContext(merged.projectRoot)
     const baseParts: string[] = [merged.systemPrompt]
     if (mycodeMdContent) baseParts.push(mycodeMdContent)
-    if (memoryContext) baseParts.push(memoryContext)
-    const basePrompt = baseParts.join('\n\n')
-
-    this.config = {
-      ...merged,
-      skills: merged.skills ?? [],
-      resolvedSystemPrompt: skillPrompt
-        ? `${basePrompt}\n\n${skillPrompt}`
-        : basePrompt,
-    }
 
     this.sessionStore = merged.sessionStore
     this.resumeSessionId = merged.resumeSessionId
@@ -120,6 +109,20 @@ export class Agent {
       } catch {
         // Session file missing or corrupt — start with empty history
       }
+
+      // Inject session memory for restored sessions
+      const memoryContext = formatMemoryContext(this.sessionDir)
+      if (memoryContext) baseParts.push(memoryContext)
+    }
+
+    const basePrompt = baseParts.join('\n\n')
+
+    this.config = {
+      ...merged,
+      skills: merged.skills ?? [],
+      resolvedSystemPrompt: skillPrompt
+        ? `${basePrompt}\n\n${skillPrompt}`
+        : basePrompt,
     }
   }
 
@@ -454,7 +457,7 @@ ${conversationText}
       const items = JSON.parse(cleaned)
       if (!Array.isArray(items)) return []
 
-      const store = new FileMemoryStore('project', this.config.projectRoot)
+      const store = new FileMemoryStore(this.sessionDir!)
       const MEMORY_TYPES = new Set(['convention', 'decision', 'fact', 'preference', 'lesson'])
       const results: Array<{ id: string }> = []
 
