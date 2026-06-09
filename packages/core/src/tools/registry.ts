@@ -103,7 +103,14 @@ export class ToolRegistry {
         description: mycodeTool.description,
         schema: mycodeTool.parameters,
         invoke: async (input: unknown) => {
-          const generator = mycodeTool.execute(input, context)
+          // LangChain may wrap single-arg tools as { input: ... }
+          let args = input
+          if (args && typeof args === 'object' && !Array.isArray(args)
+            && Object.keys(args).length === 1 && 'input' in (args as Record<string, unknown>)) {
+            const inner = (args as Record<string, unknown>).input
+            args = typeof inner === 'string' ? JSON.parse(inner) : inner
+          }
+          const generator = mycodeTool.execute(args, context)
           let result: ToolResult = {}
           let next = await generator.next()
           while (!next.done) {

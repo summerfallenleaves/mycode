@@ -235,7 +235,12 @@ export class Agent {
           }
           case 'on_tool_start': {
             const toolName = event.name
-            const args = event.data.input
+            let args = event.data.input
+            if (args && typeof args === 'object' && !Array.isArray(args)
+              && Object.keys(args).length === 1 && 'input' in (args as Record<string, unknown>)) {
+              const inner = (args as Record<string, unknown>).input
+              args = typeof inner === 'string' ? JSON.parse(inner) : inner
+            }
             entries.push({ type: 'tool_call', toolName, args })
             yield { type: 'tool_start', turnId, toolName, args }
             break
