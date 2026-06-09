@@ -59,10 +59,11 @@ function formatToolResult(toolName: string, result: unknown): string {
   switch (toolName) {
     case 'bash': {
       const exitCode = r.exitCode as number
-      const stdout = r.stdout as string
-      const stderr = r.stderr as string
+      const stdout = r.stdout as string | undefined
+      const stderr = r.stderr as string | undefined
       const exit = exitCode !== 0 ? ` (exit ${exitCode})` : ''
-      const output = (stdout || stderr).trim()
+      if (!stdout && !stderr) return exit || '(无输出)'
+      const output = (stdout || stderr)!.trim()
       if (!output) return exit || '(无输出)'
       return `${headTail(output, 3, 1, 120)}${exit}`
     }
