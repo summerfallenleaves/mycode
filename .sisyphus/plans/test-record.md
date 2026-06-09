@@ -1,0 +1,103 @@
+# mycode v0.1.0 重构后测试记录
+
+> 日期: 2026-06-09
+> 分支: `feat/langchain-migration`
+> 重构内容: Vercel AI SDK → LangChain.js `createReactAgent` + `streamEvents` v2
+
+---
+
+## 一、基础对话功能
+
+| 编号 | 测试项 | 操作 | 结果 |
+|------|--------|------|------|
+| 1.1.1 | 简单问答 | `你好，请介绍一下你自己` | ✅ 通过 |
+| 1.1.2 | 等待响应完成 | — | ✅ 通过 |
+| 1.1.3 | 简单数学 | `1+1等于几？` | ✅ 通过 |
+| 1.2.1 | 多轮对话1 | `我叫小明` | ✅ 通过 |
+| 1.2.2 | 多轮对话2 | `我叫什么名字？` | ✅ 通过 |
+| 1.3 | 流式输出 | `写一首关于春天的五言绝句` | ✅ 通过（LLM 社交性回应非代码缺陷） |
+
+## 二、内置工具测试
+
+| 编号 | 测试项 | 操作 | 结果 |
+|------|--------|------|------|
+| 2.1 | read_file | `读取 README.md 文件内容` | ✅ 通过（修复后） |
+| 2.2.1 | write | `在 /tmp/mycode-test.txt 写入 "Hello from mycode test"` | ✅ 通过（修复后） |
+| 2.2.2 | read 验证 | `读取 /tmp/mycode-test.txt 文件内容` | ✅ 通过 |
+| 2.2.3 | delete | `删除 /tmp/mycode-test.txt 文件` | ✅ 通过 |
+| 2.3 | edit | `把 README.md 中的 "从零开始构建" 替换为 "从零构建"` | ✅ 通过 |
+| 2.4 | bash | `执行 ls -la 命令查看当前项目目录` | ✅ 通过 |
+| 2.5 | grep | `搜索项目中所有包含 "Agent" 的 TypeScript 文件` | ✅ 通过 |
+| 2.6 | glob | `列出 packages 目录下所有 package.json 文件` | ✅ 通过 |
+| 2.7 | question | 编程语言选择 | ✅ 通过 |
+| 2.8 | todowrite | 创建待办列表（3 项） | ✅ 通过 |
+| 2.9.1 | memory 存储 | `记住：我喜欢用 TypeScript 开发` | ✅ 通过 |
+| 2.9.2 | memory 搜索 | 搜索 TypeScript 相关内容 | ✅ 通过 |
+
+## 三、CLI 命令测试
+
+| 编号 | 测试项 | 操作 | 结果 |
+|------|--------|------|------|
+| 3.1 | `/models` | 切换模型面板 | ❌ 不通过（输入缓冲区 `\r` 污染，根因待查） |
+| 3.2 | `/skills` | 技能列表 | ✅ 通过 |
+| 3.3 | `/mcps` | MCP 服务器状态 | ✅ 通过 |
+| 3.4 | `/connect` | 连接向导 | ✅ 通过 |
+| 3.5 | `/new` | 新对话 | ✅ 通过 |
+| 3.6 | `/compact` | 手动压缩上下文 | ⏭️ 跳过 |
+| 3.7 | `/remember`/`/memory`/`/forget` | 记忆管理 | ⏭️ 未完成 |
+| 3.8 | `/rule` | 项目规则 | ⏭️ 未测试 |
+| 3.9 | `/resume` | 恢复会话 | ⏭️ 未测试 |
+| 3.10 | `-c <sessionId>` | 命令行恢复会话 | ⏭️ 未测试 |
+| 3.11 | `/exit` | 退出 | ⏭️ 未测试 |
+
+## 四、Shell 命令和错误处理
+
+| 编号 | 测试项 | 操作 | 结果 |
+|------|--------|------|------|
+| 4.1 | `!` Shell 执行 | `!echo hello` | ⏭️ 未测试 |
+| 4.2 | 未知命令 | `/nonexistent` | ⏭️ 未测试 |
+| 4.3 | 空输入 | 直接按回车 | ⏭️ 未测试 |
+| 4.4 | 自动补全 | `/mod` + Tab | ⏭️ 未测试 |
+
+## 五～十、状态栏/会话/压缩/技能/MCP/Provider 兼容性
+
+| 编号 | 测试项 | 结果 |
+|------|--------|------|
+| 5.x | 状态栏和界面（上下文占用率/Todo/运行状态） | ⏭️ 未测试 |
+| 6.x | 会话持久化（自动保存/恢复/无效ID） | ⏭️ 未测试 |
+| 7.x | 上下文压缩（自动触发/手动压缩） | ⏭️ 未测试 |
+| 8.x | 技能系统（技能触发） | ⏭️ 未测试 |
+| 9.x | MCP 工具（Web 搜索/页面读取） | ⏭️ 未测试 |
+| 10.x | Provider 兼容性（OpenAI/DeepSeek/Anthropic） | ⏭️ 未测试 |
+
+---
+
+## 测试中修复的 Bug
+
+| Commit | 问题 | 修复 |
+|--------|------|------|
+| `24d58ae` | `createReactAgent` 收到 Record 而非数组导致 `.filter()` 崩溃 | Record→`tool()` 数组转换 |
+| `25d9aa2` | assistant 消息不保存导致多轮对话丢失上下文 | `fullText` 追加到 `this.messages`；`HumanMessage`→`AIMessage` |
+| `8cf4b93` | `formatToolResult` 中 `(undefined).trim()` 崩溃 | JSON.parse + 防御性默认 `{}` + `undefined` 检查 |
+| `1fccf1c` | `output.content` 为 `undefined` 导致 `tool_end` 崩溃 | 加强 `null/undefined` 防护 + 非对象包装 |
+| `929e602` | LangChain 将 args 嵌套为 `{input: escapedJson}` | `toLangChainTools()` + `agent.ts` 中解包 |
+| `e2716ad` | 输入缓冲区 `\r` 污染导致 `/models` 命令无效 | 过滤 `\r`/`\n` 字符 |
+| 待修复 | `/models` 面板不渲染 | 根因：输入污染仍残留；`positionCursorForIme` ANSI 干扰待验证 |
+
+## 架构变更
+
+| 变更 | 描述 |
+|------|------|
+| LLM 调用 | Vercel AI SDK → LangChain `createReactAgent` + `streamEvents` v2 |
+| 工具系统 | `toToolSet()` → `toLangChainTools()` + `tool()` 包装 |
+| 会话持久化 | 扁平 `messages[]` → `SessionFile v2`（`turns[].entries[]`，5 种消息类型） |
+| Checkpointing | 新增 `MemorySaver`，`thread_id` 实现会话隔离 |
+| 依赖 | 移除 `ai`/`@ai-sdk/*` → 新增 `langchain`/`@langchain/*` |
+| 版本 | 0.0.2 → 0.1.0 |
+
+## 待办
+
+- [ ] 修复 `/models` 面板渲染问题（`positionCursorForIme` ANSI 干扰）
+- [ ] Section 三～十剩余测试
+- [ ] 修复 `blessed.unicode` TypeScript 类型错误（预存在）
+- [ ] 补充自动化测试（当前覆盖率 0）
