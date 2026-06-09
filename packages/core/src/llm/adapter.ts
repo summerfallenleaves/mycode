@@ -107,14 +107,15 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
           try {
             const stream = await model.stream(messagesForModel, { signal: params.signal })
             for await (const chunk of stream) {
-              if (typeof chunk.content === 'string' && chunk.content) {
+              const content = chunk.content
+              if (typeof content === 'string' && content) {
                 hasOutput = true
-                yield { type: 'text-delta', delta: chunk.content }
-              } else if (Array.isArray(chunk.content)) {
-                for (const part of chunk.content) {
-                  if (part.type === 'text' && part.text) {
+                yield { type: 'text-delta', delta: content }
+              } else if (Array.isArray(content)) {
+                for (const part of content) {
+                  if (part && (part as any).type === 'text' && typeof (part as any).text === 'string') {
                     hasOutput = true
-                    yield { type: 'text-delta', delta: part.text }
+                    yield { type: 'text-delta', delta: (part as any).text as string }
                   }
                 }
               }
@@ -130,10 +131,25 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
         }
 
         const { createReactAgent } = await import('@langchain/langgraph/prebuilt')
+        const { tool: lcTool } = await import('langchain')
+
+        const lcTools = Object.entries(params.tools).map(([name, toolDef]) =>
+          lcTool(
+            async (input: unknown) => {
+              const result = await toolDef.execute!(input)
+              return JSON.stringify(result)
+            },
+            {
+              name,
+              description: toolDef.description ?? '',
+              schema: toolDef.inputSchema as Record<string, unknown>,
+            }
+          )
+        )
 
         const agent = createReactAgent({
           llm: model,
-          tools: params.tools as any,
+          tools: lcTools,
           prompt: params.system,
         })
 
