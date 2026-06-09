@@ -18,8 +18,6 @@ export { readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questi
 export { getTodoPath, readTodos } from './tools/builtin/todowrite.js'
 export type { TodoItem } from './tools/builtin/todowrite.js'
 
-export { SessionContext } from './session/context.js'
-export type { Message } from './session/context.js'
 export { FileSessionStore } from './session/store.js'
 export type { SessionStore } from './session/store.js'
 
