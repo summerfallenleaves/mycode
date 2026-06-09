@@ -1,11 +1,8 @@
-/**
- * @fileoverview Agent class with AsyncGenerator-based run loop; AgentConfig interface; orchestrates LLM calls, tool execution, and event emission
- * @module @my-agent/core/agent
- */
-
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
+import { HumanMessage, SystemMessage } from '@langchain/core/messages'
 import type { AgentEvent } from './event.js'
 import type { LLMAdapter, LLMMessage } from './llm/adapter.js'
 import { ToolRegistry, type ToolContext, type ToolEvent, type QuestionPayload } from './tools/registry.js'
@@ -18,8 +15,9 @@ import { formatMemoryContext, FileMemoryStore } from './memory/store.js'
 import type { SessionStore } from './session/store.js'
 
 export interface AgentConfig {
-  llm: LLMAdapter
-  model?: string
+  llm?: LLMAdapter
+  model?: BaseChatModel
+  modelName?: string
   tools?: ToolRegistry
   systemPrompt?: string
   maxSteps?: number
@@ -36,8 +34,10 @@ export interface AgentConfig {
   minCompressionInterval?: number
 }
 
-type InternalAgentConfig = Required<Omit<AgentConfig, 'sessionStore' | 'resumeSessionId'>> & {
+type InternalAgentConfig = Required<Omit<AgentConfig, 'model' | 'llm' | 'sessionStore' | 'resumeSessionId'>> & {
   resolvedSystemPrompt: string
+  model?: BaseChatModel
+  llm?: LLMAdapter
   sessionStore: SessionStore | null
   resumeSessionId: string | undefined
 }
@@ -56,7 +56,7 @@ export class Agent {
 
   constructor(config: AgentConfig) {
     const defaults = {
-      model: 'deepseek-v4-flash',
+      modelName: 'deepseek-v4-flash',
       tools: new ToolRegistry(),
       systemPrompt: '你是mycode，由summerfallenleaves开发的AI助手。',
       maxSteps: 5,
@@ -72,6 +72,7 @@ export class Agent {
       minCompressionInterval: 3 as number,
     }
     const merged = { ...defaults, ...config }
+    if (config.model) merged.model = config.model
 
     const skillsEnabled = merged.skillsConfig?.enabled ?? true
     let skillPrompt = ''
@@ -93,7 +94,6 @@ export class Agent {
       this.sessionDir = resolve(process.cwd(), '.mycode', 'sessions', this.sessionId)
       mkdirSync(this.sessionDir, { recursive: true })
 
-      // Synchronously load session messages to avoid race condition with run()
       const messagesPath = join(this.sessionDir, 'messages.json')
       try {
         const raw = readFileSync(messagesPath, 'utf-8')
@@ -110,7 +110,6 @@ export class Agent {
         // Session file missing or corrupt — start with empty history
       }
 
-      // Inject session memory for restored sessions
       const memoryContext = formatMemoryContext(this.sessionDir)
       if (memoryContext) baseParts.push(memoryContext)
     }
@@ -120,6 +119,7 @@ export class Agent {
     this.config = {
       ...merged,
       skills: merged.skills ?? [],
+      model: merged.model,
       resolvedSystemPrompt: skillPrompt
         ? `${basePrompt}\n\n${skillPrompt}`
         : basePrompt,
@@ -180,41 +180,16 @@ export class Agent {
       },
     }
 
-    const { stream, responseMessages } = this.config.llm.streamText({
-      model: this.config.model,
-      system: this.config.resolvedSystemPrompt,
-      messages: this.messages,
-      tools: this.config.tools.toToolSet(toolContext),
-      maxSteps: this.config.maxSteps,
-      signal,
-    })
+    const model = this.config.model ?? this.getFallbackModel()
 
     try {
-      for await (const chunk of stream) {
-        switch (chunk.type) {
-          case 'text-delta':
-            yield { type: 'thinking_delta', turnId, delta: chunk.delta }
-            break
-          case 'tool-start':
-            yield { type: 'tool_start', turnId, toolName: chunk.toolName, args: chunk.args }
-            break
-          case 'tool-end': {
-            // Drain buffered progress/data events as tool_delta
-            for (const ev of toolEventBuffer) {
-              if (ev.type === 'progress') {
-                yield { type: 'tool_delta', turnId, toolName: chunk.toolName, delta: ev.message }
-              } else if (ev.type === 'data') {
-                yield { type: 'tool_delta', turnId, toolName: chunk.toolName, delta: ev.chunk }
-    }
-
-    this.compressionTurnCount++
-  }
-            toolEventBuffer.length = 0
-            yield { type: 'tool_end', turnId, toolName: chunk.toolName, result: chunk.result }
-            break
-          }
-        }
+      if (model) {
+        yield* this.runWithLangChain(model, toolContext, toolEventBuffer, turnId, signal)
+      } else {
+        yield* this.runWithAdapter(signal, turnId, toolContext, toolEventBuffer)
       }
+
+      this.compressionTurnCount++
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       yield { type: 'error', turnId, code: 'agent_error', message }
@@ -223,7 +198,7 @@ export class Agent {
       await this.persistMessages()
 
       if (this.config.autoMemoryExtraction) {
-        const memories = await this.extractMemory()
+        const memories = await this.extractMemory(model)
         if (memories.length > 0) {
           yield { type: 'memory_extracted', turnId, count: memories.length }
         }
@@ -231,21 +206,152 @@ export class Agent {
       return
     }
 
-    const newMessages = await responseMessages
-    for (const msg of newMessages) {
-      this.messages.push(msg)
-    }
-
     yield { type: 'thinking_end', turnId, fullText: '' }
     yield { type: 'session_end', sessionId: this.sessionId!, reason: 'completed', timestamp: Date.now() }
     await this.persistMessages()
 
     if (this.config.autoMemoryExtraction) {
-      const memories = await this.extractMemory()
+      const memories = await this.extractMemory(model)
       if (memories.length > 0) {
         yield { type: 'memory_extracted', turnId, count: memories.length }
       }
     }
+  }
+
+  private async *runWithLangChain(
+    model: BaseChatModel,
+    toolContext: ToolContext,
+    toolEventBuffer: ToolEvent[],
+    turnId: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<AgentEvent, void, undefined> {
+    const { createReactAgent } = await import('@langchain/langgraph/prebuilt')
+    const { tool: lcTool } = await import('langchain')
+
+    const lcTools = this.config.tools.toLangChainTools(toolContext).map((t: any) =>
+      lcTool(t.invoke, { name: t.name, description: t.description, schema: t.schema })
+    )
+
+    const lcMessages = this.messages.map(msg => {
+      switch (msg.role) {
+        case 'user': return new HumanMessage({ content: msg.content })
+        case 'assistant': return new HumanMessage({ content: msg.content })
+        case 'system': return new SystemMessage({ content: msg.content })
+        default: return new HumanMessage({ content: msg.content })
+      }
+    })
+
+    const agent = createReactAgent({
+      llm: model,
+      tools: lcTools,
+      prompt: this.config.resolvedSystemPrompt,
+    })
+
+    try {
+      const stream = agent.streamEvents(
+        { messages: lcMessages },
+        { version: 'v2', signal }
+      )
+
+      for await (const event of stream) {
+        switch (event.event) {
+          case 'on_chat_model_stream': {
+            const chunk = event.data.chunk
+            if (typeof chunk.content === 'string' && chunk.content) {
+              yield { type: 'thinking_delta', turnId, delta: chunk.content }
+            }
+            break
+          }
+          case 'on_tool_start': {
+            const toolName = event.name
+            const args = event.data.input
+            yield { type: 'tool_start', turnId, toolName, args }
+            break
+          }
+          case 'on_tool_end': {
+            const toolName = event.name
+            for (const ev of toolEventBuffer) {
+              if (ev.type === 'progress') {
+                yield { type: 'tool_delta', turnId, toolName, delta: ev.message }
+              } else if (ev.type === 'data') {
+                yield { type: 'tool_delta', turnId, toolName, delta: ev.chunk }
+              }
+            }
+            toolEventBuffer.length = 0
+
+            const output = event.data.output
+            const result = output.content
+            yield { type: 'tool_end', turnId, toolName, result }
+            this.messages.push({
+              role: 'tool',
+              content: typeof result === 'string' ? result : JSON.stringify(result),
+              toolName,
+              toolResult: result,
+            })
+            break
+          }
+        }
+      }
+    } catch (err) {
+      const errAny = err as any
+      if (errAny?.name === 'AI_NoOutputGeneratedError') {
+        yield { type: 'thinking_delta', turnId, delta: '（API 返回了空响应，请重试）' }
+      }
+      throw err
+    }
+  }
+
+  private async *runWithAdapter(
+    signal: AbortSignal,
+    turnId: string,
+    toolContext: ToolContext,
+    toolEventBuffer: ToolEvent[],
+  ): AsyncGenerator<AgentEvent, void, undefined> {
+    const llm = this.config.llm
+    if (!llm) {
+      yield { type: 'error', turnId, code: 'agent_error', message: 'No LLM adapter configured' }
+      return
+    }
+    const { stream, responseMessages } = llm.streamText({
+      model: this.config.modelName,
+      system: this.config.resolvedSystemPrompt,
+      messages: this.messages,
+      tools: this.config.tools.toToolSet(toolContext),
+      maxSteps: this.config.maxSteps,
+      signal,
+    })
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case 'text-delta':
+          yield { type: 'thinking_delta', turnId, delta: chunk.delta }
+          break
+        case 'tool-start':
+          yield { type: 'tool_start', turnId, toolName: chunk.toolName, args: chunk.args }
+          break
+        case 'tool-end': {
+          for (const ev of toolEventBuffer) {
+            if (ev.type === 'progress') {
+              yield { type: 'tool_delta', turnId, toolName: chunk.toolName, delta: ev.message }
+            } else if (ev.type === 'data') {
+              yield { type: 'tool_delta', turnId, toolName: chunk.toolName, delta: ev.chunk }
+            }
+          }
+          toolEventBuffer.length = 0
+          yield { type: 'tool_end', turnId, toolName: chunk.toolName, result: chunk.result }
+          break
+        }
+      }
+    }
+
+    const newMessages = await responseMessages
+    for (const msg of newMessages) {
+      this.messages.push(msg)
+    }
+  }
+
+  private getFallbackModel(): BaseChatModel | undefined {
+    return undefined
   }
 
   private async persistMessages(): Promise<void> {
@@ -293,7 +399,6 @@ export class Agent {
 
     if (compressEnd < 1) return null
 
-    // Extract user+assistant messages from the portion to compress (skip tool messages)
     const toCompress = this.messages
       .slice(0, compressEnd)
       .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -322,23 +427,15 @@ ${conversationText}
 摘要：`
 
     try {
-      const { stream } = this.config.llm.streamText({
-        model: this.config.model,
-        system: '你是一个高效的对话压缩系统。将长对话压缩为简洁摘要，不丢失关键信息。',
-        messages: [{ role: 'user', content: prompt }],
-        tools: {},
-        maxSteps: 1,
-      })
+      const model = this.config.model ?? this.getCompressionModel()
+      if (!model) return null
 
-      let summary = ''
-      for await (const chunk of stream) {
-        if (chunk.type === 'text-delta') {
-          summary += chunk.delta
-        }
-      }
+      const systemMsg = new SystemMessage({ content: '你是一个高效的对话压缩系统。将长对话压缩为简洁摘要，不丢失关键信息。' })
+      const userMsg = new HumanMessage({ content: prompt })
+      const result = await model.invoke([systemMsg, userMsg])
+      const summary = typeof result.content === 'string' ? result.content : ''
 
       if (!summary.trim()) {
-        // LLM returned empty summary — fall back to tool pruning only
         const pruned = this.pruneToolResults()
         if (pruned) {
           return { before: this.messages.length, after: this.messages.length, beforeTokens, afterTokens: this.estimateTokensForMessages(), prunedToolResults: pruned.prunedCount }
@@ -354,7 +451,6 @@ ${conversationText}
       this.messages = [summaryMsg, ...this.messages.slice(compressEnd)]
       const after = this.messages.length
 
-      // Also prune tool results after compression to reclaim additional space
       const pruned = this.pruneToolResults()
       const afterTokens = this.estimateTokensForMessages()
 
@@ -362,13 +458,17 @@ ${conversationText}
 
       return { before, after, beforeTokens, afterTokens, prunedToolResults: pruned?.prunedCount }
     } catch {
-      // LLM call failed — fall back to tool pruning only
       const pruned = this.pruneToolResults()
       if (pruned) {
         return { before: this.messages.length, after: this.messages.length, beforeTokens, afterTokens: this.estimateTokensForMessages(), prunedToolResults: pruned.prunedCount }
       }
       return null
     }
+  }
+
+  private getCompressionModel(): BaseChatModel | undefined {
+    if (this.config.model) return this.config.model
+    return undefined
   }
 
   private estimateTokensForMessages(): number {
@@ -406,9 +506,12 @@ ${conversationText}
     return { beforeTokens, afterTokens, prunedCount }
   }
 
-  private async extractMemory(): Promise<Array<{ id: string }>> {
+  private async extractMemory(model?: BaseChatModel): Promise<Array<{ id: string }>> {
     const relevantMessages = this.messages.filter(m => m.role === 'user' || m.role === 'assistant')
     if (relevantMessages.length < 2) return []
+
+    const llm = model ?? this.config.model
+    if (!llm) return []
 
     const conversationText = relevantMessages
       .slice(-20)
@@ -438,20 +541,12 @@ ${conversationText}
 }`
 
     try {
-      const { stream } = this.config.llm.streamText({
-        model: this.config.model,
-        system: '你是 mycode 的记忆提取系统。从对话中提取结构化记忆。',
-        messages: [{ role: 'user', content: prompt }],
-        tools: {},
-        maxSteps: 1,
-      })
+      const systemMsg = new SystemMessage({ content: '你是 mycode 的记忆提取系统。从对话中提取结构化记忆。' })
+      const userMsg = new HumanMessage({ content: prompt })
+      const result = await llm.invoke([systemMsg, userMsg])
 
-      let fullText = ''
-      for await (const chunk of stream) {
-        if (chunk.type === 'text-delta') {
-          fullText += chunk.delta
-        }
-      }
+      let fullText = typeof result.content === 'string' ? result.content : ''
+      if (!fullText) return []
 
       const cleaned = fullText.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim()
       const items = JSON.parse(cleaned)
@@ -511,7 +606,6 @@ ${conversationText}
     }
   }
 
-  /** Manually trigger context compression and tool result pruning. Returns null if nothing to compress. */
   async compactMessages(): Promise<{
     before: number
     after: number
@@ -519,11 +613,9 @@ ${conversationText}
     afterTokens: number
     prunedToolResults?: number
   } | null> {
-    // Manual compression ignores cooldown but still checks threshold
     return this.compressContext('manual')
   }
 
-  /** Provide an answer to the currently pending question. Resumes the blocked tool execution. */
   answerQuestion(answers: string[]): void {
     if (this.resolveQuestion) {
       this.resolveQuestion(answers)

@@ -3,7 +3,7 @@
  * @module @my-agent/web/src/app/api/agent/route
  */
 
-import { Agent, createAdapter, ToolRegistry, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool } from '@my-agent/core'
+import { Agent, createAdapter, createChatModel, ToolRegistry, readFileTool, editTool, writeTool, bashTool, grepTool, globTool, questionTool, todowriteTool } from '@my-agent/core'
 
 // SSE 端点：将 AsyncGenerator<AgentEvent> 映射为 Server-Sent Events
 export async function POST(req: Request) {
@@ -18,6 +18,12 @@ export async function POST(req: Request) {
   }
 
   const agent = new Agent({
+    model: createChatModel({
+      format: 'openai',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: process.env.MYCODE_API_KEY ?? '',
+      model: 'deepseek-v4-flash',
+    }),
     llm: createAdapter({
       format: 'openai',
       baseUrl: 'https://api.deepseek.com',

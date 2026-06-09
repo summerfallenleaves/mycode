@@ -6,7 +6,7 @@
 import { execSync } from 'node:child_process'
 import blessed from 'blessed'
 import {
-  Agent, createAdapter, ToolRegistry, readConfig, readFileTool, editTool, writeTool,
+  Agent, createAdapter, createChatModel, ToolRegistry, readConfig, readFileTool, editTool, writeTool,
   bashTool, grepTool, globTool, questionTool, todowriteTool, memoryTool,
   MCPClientManager, scanSkills, addProvider, FileSessionStore, FileMemoryStore, readTodos,
   appendRule,
@@ -63,7 +63,9 @@ function createAgent(providerName: string, preScannedSkills?: SkillInfo[], resum
   if (!provider) throw new Error(`Provider "${providerName}" not found`)
   const apiKey = process.env.MYCODE_API_KEY ?? provider.apiKey
   return new Agent({
+    model: createChatModel({ format: provider.format, baseUrl: provider.baseUrl, apiKey, model: provider.model }),
     llm: createAdapter({ format: provider.format, baseUrl: provider.baseUrl, apiKey, model: provider.model }),
+    modelName: provider.model,
     tools: SHARED_TOOLS,
     systemPrompt: config.agent.systemPrompt,
     maxSteps: config.agent.maxSteps,

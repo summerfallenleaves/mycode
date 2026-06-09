@@ -80,7 +80,6 @@ export class ToolRegistry {
           while (!next.done) {
             const event = next.value as ToolEvent
             if (event.type === 'question_ask' && context.askQuestion) {
-              // Two-way generator: feed user's answer back into the tool
               const answer = await context.askQuestion(event.question)
               next = await generator.next(answer as never)
             } else {
@@ -94,5 +93,35 @@ export class ToolRegistry {
       }
     }
     return set
+  }
+
+  toLangChainTools(context: ToolContext): Array<ReturnType<typeof import('langchain').tool>> {
+    const tools: Array<ReturnType<typeof import('langchain').tool>> = []
+    for (const mycodeTool of this.tools.values()) {
+      const wrapper = {
+        name: mycodeTool.name,
+        description: mycodeTool.description,
+        schema: mycodeTool.parameters,
+        invoke: async (input: unknown) => {
+          const generator = mycodeTool.execute(input, context)
+          let result: ToolResult = {}
+          let next = await generator.next()
+          while (!next.done) {
+            const event = next.value as ToolEvent
+            if (event.type === 'question_ask' && context.askQuestion) {
+              const answer = await context.askQuestion(event.question)
+              next = await generator.next(answer as never)
+            } else {
+              context.emitToolEvent?.(event)
+              next = await generator.next()
+            }
+          }
+          if (next.value) result = next.value as ToolResult
+          return JSON.stringify(result)
+        },
+      }
+      tools.push(wrapper as any)
+    }
+    return tools
   }
 }
