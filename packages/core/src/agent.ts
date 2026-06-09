@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync } from 'node:fs'
-import { resolve, join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages'
 import type { AgentEvent } from './event.js'
@@ -12,7 +12,7 @@ import type { SkillInfo } from './skill/index.js'
 import type { SkillsConfig } from './config.js'
 import { loadMycodeMd } from './memory/mycode-md.js'
 import { formatMemoryContext, FileMemoryStore } from './memory/store.js'
-import type { SessionStore } from './session/store.js'
+import type { SessionStore, TurnRecord, TurnEntry, SessionFileV2 } from './session/store.js'
 
 export interface AgentConfig {
   model: BaseChatModel
@@ -46,6 +46,7 @@ export class Agent {
   private readonly sessionStore: SessionStore | null
   private readonly resumeSessionId: string | undefined
   private messages: Array<LLMMessage> = []
+  private turnHistory: TurnRecord[] = []
   private resolveQuestion: ((answers: string[]) => void) | null = null
   private compressionTurnCount: number = 0
 
@@ -90,21 +91,29 @@ export class Agent {
       this.sessionDir = resolve(process.cwd(), '.mycode', 'sessions', this.sessionId)
       mkdirSync(this.sessionDir, { recursive: true })
 
-      const messagesPath = join(this.sessionDir, 'messages.json')
-      try {
-        const raw = readFileSync(messagesPath, 'utf-8')
-        const data = JSON.parse(raw) as { messages: Array<{ role: string; content: string; toolName?: string; toolResult?: unknown }> }
-        if (data.messages) {
-          this.messages = data.messages.map(m => ({
-            role: m.role,
-            content: m.content,
-            ...(m.toolName ? { toolName: m.toolName } : {}),
-            ...(m.toolResult !== undefined ? { toolResult: m.toolResult } : {}),
-          })) as Array<LLMMessage>
+      this.sessionStore?.load(this.sessionId).then(file => {
+        if (file?.turns) {
+          this.turnHistory = file.turns
+          for (const turn of file.turns) {
+            for (const entry of turn.entries) {
+              if (entry.type === 'user') {
+                this.messages.push({ role: 'user', content: entry.content })
+              } else if (entry.type === 'tool_call') {
+                // matched by tool_result later
+              } else if (entry.type === 'tool_result') {
+                this.messages.push({
+                  role: 'tool',
+                  content: JSON.stringify(entry.result ?? ''),
+                  toolName: entry.toolName,
+                  toolResult: entry.result,
+                })
+              } else if (entry.type === 'answer') {
+                this.messages.push({ role: 'assistant', content: entry.content })
+              }
+            }
+          }
         }
-      } catch {
-        // Session file missing or corrupt — start with empty history
-      }
+      })
 
       const memoryContext = formatMemoryContext(this.sessionDir)
       if (memoryContext) baseParts.push(memoryContext)
@@ -119,6 +128,10 @@ export class Agent {
         ? `${basePrompt}\n\n${skillPrompt}`
         : basePrompt,
     }
+  }
+
+  getTurnHistory(): readonly TurnRecord[] {
+    return this.turnHistory
   }
 
   private initializeSession(): void {
@@ -136,6 +149,7 @@ export class Agent {
     const signal = createTimeoutSignal(this.config.runTimeoutMs)
 
     this.messages.push({ role: 'user', content: input })
+    const entries: TurnEntry[] = [{ type: 'user', content: input }]
 
     if (this.config.contextCompressionThreshold > 0) {
       const compressed = await this.compressContext()
@@ -220,7 +234,10 @@ export class Agent {
             break
           }
           case 'on_tool_start': {
-            yield { type: 'tool_start', turnId, toolName: event.name, args: event.data.input }
+            const toolName = event.name
+            const args = event.data.input
+            entries.push({ type: 'tool_call', toolName, args })
+            yield { type: 'tool_start', turnId, toolName, args }
             break
           }
           case 'on_tool_end': {
@@ -241,6 +258,8 @@ export class Agent {
             }
             if (result === null || result === undefined) result = {}
             if (typeof result !== 'object') result = { content: String(result) }
+
+            entries.push({ type: 'tool_result', toolName, result })
             yield { type: 'tool_end', turnId, toolName, result }
             this.messages.push({
               role: 'tool',
@@ -254,16 +273,19 @@ export class Agent {
       }
 
       if (fullText) {
+        entries.push({ type: 'answer', content: fullText })
         this.messages.push({ role: 'assistant', content: fullText })
       }
 
+      this.turnHistory.push({ turnId, entries })
       this.compressionTurnCount++
+      await this.persistTurns()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       yield { type: 'error', turnId, code: 'agent_error', message }
       yield { type: 'thinking_end', turnId, fullText: '' }
       yield { type: 'session_end', sessionId: this.sessionId!, reason: 'error', timestamp: Date.now() }
-      await this.persistMessages()
+      await this.persistTurns()
 
       if (this.config.autoMemoryExtraction) {
         const memories = await this.extractMemory()
@@ -276,7 +298,6 @@ export class Agent {
 
     yield { type: 'thinking_end', turnId, fullText: '' }
     yield { type: 'session_end', sessionId: this.sessionId!, reason: 'completed', timestamp: Date.now() }
-    await this.persistMessages()
 
     if (this.config.autoMemoryExtraction) {
       const memories = await this.extractMemory()
@@ -286,17 +307,19 @@ export class Agent {
     }
   }
 
-  private async persistMessages(): Promise<void> {
+  private async persistTurns(): Promise<void> {
     if (!this.sessionStore || !this.sessionId) return
 
-    const toSave = this.messages.map(m => ({
-      role: m.role as 'user' | 'assistant' | 'tool',
-      content: m.content,
-      ...(m.toolName ? { toolName: m.toolName } : {}),
-      ...(m.toolResult ? { toolResult: m.toolResult } : {}),
-    }))
+    const file: SessionFileV2 = {
+      version: 2,
+      sessionId: this.sessionId,
+      createdAt: '',
+      updatedAt: '',
+      systemPrompt: this.config.resolvedSystemPrompt,
+      turns: this.turnHistory,
+    }
 
-    await this.sessionStore.save(this.sessionId, toSave)
+    await this.sessionStore.save(this.sessionId, file)
   }
 
   private async compressContext(compressionType: 'auto' | 'manual' = 'auto'): Promise<{

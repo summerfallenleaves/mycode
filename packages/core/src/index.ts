@@ -19,7 +19,7 @@ export { getTodoPath, readTodos } from './tools/builtin/todowrite.js'
 export type { TodoItem } from './tools/builtin/todowrite.js'
 
 export { FileSessionStore } from './session/store.js'
-export type { SessionStore } from './session/store.js'
+export type { SessionStore, TurnRecord, TurnEntry, SessionFileV2 } from './session/store.js'
 
 export { withTimeout, createTimeoutSignal } from './safety/timeout.js'
 

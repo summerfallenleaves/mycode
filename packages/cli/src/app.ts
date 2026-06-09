@@ -11,7 +11,7 @@ import {
   MCPClientManager, scanSkills, addProvider, FileSessionStore, FileMemoryStore, readTodos,
   appendRule,
 } from '@my-agent/core'
-import type { LLMProviderConfig, MCPServerStatus, SkillInfo, TodoItem, QuestionPayload } from '@my-agent/core'
+import type { LLMProviderConfig, MCPServerStatus, SkillInfo, TodoItem, QuestionPayload, TurnRecord } from '@my-agent/core'
 import { AgentStreamManager } from './lib/agent-stream-manager.js'
 import type { ViewEvent } from './lib/agent-stream-manager.js'
 import { renderEvents } from './components/event-renderer.js'
@@ -102,7 +102,7 @@ interface AppState {
   connectSelectIdx: number
   unknownCmd: string | null
   showResumeList: boolean
-  resumeList: Array<{ sessionId: string; messageCount: number; updatedAt: string }>
+  resumeList: Array<{ sessionId: string; turnCount: number; updatedAt: string }>
   resumeSelectIdx: number
   statusMsg: { text: string; color: string } | null
   pendingQuestion: QuestionPayload | null
@@ -380,23 +380,34 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     s.skills = []
   }
 
+  function turnsToHistoryEvents(turns: TurnRecord[]): ViewEvent[] {
+    const events: ViewEvent[] = []
+    for (const turn of turns) {
+      for (const entry of turn.entries) {
+        if (entry.type === 'user') {
+          events.push({ type: 'user_message', content: entry.content })
+        } else if (entry.type === 'tool_call') {
+          events.push({ type: 'tool_start', turnId: turn.turnId, toolName: entry.toolName, args: entry.args })
+        } else if (entry.type === 'tool_result') {
+          events.push({ type: 'tool_end', turnId: turn.turnId, toolName: entry.toolName, result: entry.result })
+        } else if (entry.type === 'answer') {
+          events.push({ type: 'answer_start', turnId: turn.turnId })
+          events.push({ type: 'answer_delta', turnId: turn.turnId, delta: entry.content })
+          events.push({ type: 'answer_end', turnId: turn.turnId, fullText: entry.content })
+        }
+      }
+    }
+    return events
+  }
+
   // Session restore
   if (opts.continueSessionId) {
     const sid = opts.continueSessionId
-    SESSION_STORE.load(sid).then(msgs => {
-      if (msgs && msgs.length > 0) {
+    SESSION_STORE.load(sid).then(file => {
+      if (file?.turns && file.turns.length > 0) {
         agent = createAgent(s.activeProvider, s.skills, sid)
-        const historyEvents: ViewEvent[] = []
-        for (const msg of msgs) {
-          if (msg.role === 'user') {
-            historyEvents.push({ type: 'user_message', content: msg.content })
-          } else if (msg.role === 'assistant') {
-            historyEvents.push({ type: 'answer_start', turnId: `history-${Date.now()}` })
-            historyEvents.push({ type: 'answer_delta', turnId: `history-${Date.now()}`, delta: msg.content })
-            historyEvents.push({ type: 'answer_end', turnId: `history-${Date.now()}`, fullText: msg.content })
-          }
-        }
-        streamManager.addHistoryEvents(historyEvents)
+        streamManager.addHistoryEvents(turnsToHistoryEvents(file.turns))
+        update()
       } else {
         s.unknownCmd = `会话 ${sid.slice(0, 8)}... 不存在或为空`
         update()
@@ -448,19 +459,9 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
           agent = createAgent(s.activeProvider, s.skills, selected.sessionId)
           clearInput()
           s.showResumeList = false
-          SESSION_STORE.load(selected.sessionId).then(msgs => {
-            if (msgs && msgs.length > 0) {
-              const historyEvents: ViewEvent[] = []
-              for (const msg of msgs) {
-                if (msg.role === 'user') {
-                  historyEvents.push({ type: 'user_message', content: msg.content })
-                } else if (msg.role === 'assistant') {
-                  historyEvents.push({ type: 'answer_start', turnId: `history-${Date.now()}` })
-                  historyEvents.push({ type: 'answer_delta', turnId: `history-${Date.now()}`, delta: msg.content })
-                  historyEvents.push({ type: 'answer_end', turnId: `history-${Date.now()}`, fullText: msg.content })
-                }
-              }
-              streamManager.addHistoryEvents(historyEvents)
+          SESSION_STORE.load(selected.sessionId).then(file => {
+            if (file?.turns && file.turns.length > 0) {
+              streamManager.addHistoryEvents(turnsToHistoryEvents(file.turns))
             }
           })
           update()

@@ -203,7 +203,7 @@ export function renderConnectWizardPanel(step: ConnectStep, config: ConnectConfi
 }
 
 export function renderResumeList(
-  resumeList: Array<{ sessionId: string; messageCount: number; updatedAt: string }>,
+  resumeList: Array<{ sessionId: string; turnCount: number; updatedAt: string }>,
   selectIdx: number,
 ): string {
   const lines: string[] = []
@@ -213,7 +213,7 @@ export function renderResumeList(
   }
   for (let i = 0; i < resumeList.length; i++) {
     const s = resumeList[i]!
-    const text = ` ${i + 1}. ${s.sessionId.slice(0, 8)}... (${s.messageCount} 条消息)`
+    const text = ` ${i + 1}. ${s.sessionId.slice(0, 8)}... (${s.turnCount} 轮对话)`
     if (i === selectIdx) {
       lines.push(`{inverse}${text}{/inverse}`)
     } else {
