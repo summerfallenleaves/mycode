@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
-import { HumanMessage, SystemMessage } from '@langchain/core/messages'
+import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages'
 import type { AgentEvent } from './event.js'
 import type { LLMMessage } from './llm/adapter.js'
 import { ToolRegistry, type ToolContext, type ToolEvent, type QuestionPayload } from './tools/registry.js'
@@ -189,7 +189,7 @@ export class Agent {
       const lcMessages = this.messages.map(msg => {
         switch (msg.role) {
           case 'user': return new HumanMessage({ content: msg.content })
-          case 'assistant': return new HumanMessage({ content: msg.content })
+          case 'assistant': return new AIMessage({ content: msg.content })
           case 'system': return new SystemMessage({ content: msg.content })
           default: return new HumanMessage({ content: msg.content })
         }
@@ -207,11 +207,14 @@ export class Agent {
         { version: 'v2', signal, configurable: { thread_id: this.sessionId } }
       )
 
+      let fullText = ''
+
       for await (const event of stream) {
         switch (event.event) {
           case 'on_chat_model_stream': {
             const chunk = event.data.chunk
             if (typeof chunk.content === 'string' && chunk.content) {
+              fullText += chunk.content
               yield { type: 'thinking_delta', turnId, delta: chunk.content }
             }
             break
@@ -246,6 +249,10 @@ export class Agent {
             break
           }
         }
+      }
+
+      if (fullText) {
+        this.messages.push({ role: 'assistant', content: fullText })
       }
 
       this.compressionTurnCount++
