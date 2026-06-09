@@ -1,12 +1,10 @@
-/**
- * @fileoverview Vercel AI SDK adapter: LLMConfig/LLMMessage types, createAdapter(), provider format support (openai/anthropic), developer→system role fix
- * @module @my-agent/core/llm/adapter
- */
+import { ChatOpenAI } from '@langchain/openai'
+import { ChatAnthropic } from '@langchain/anthropic'
+import { ChatDeepSeek } from '@langchain/deepseek'
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages'
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models'
 
-import type { ToolSet } from 'ai'
-import { stepCountIs } from 'ai'
-
-export type ProviderFormat = 'openai' | 'anthropic'
+export type ProviderFormat = 'openai' | 'anthropic' | 'deepseek'
 
 export interface LLMConfig {
   format: ProviderFormat
@@ -45,73 +43,141 @@ export interface LLMAdapter {
   }): LLMStreamResult
 }
 
-function toProviderMessage(msg: LLMMessage): Record<string, unknown> {
-  if (msg.role === 'tool') {
-    return { role: 'tool', content: JSON.stringify({ result: msg.toolResult }) }
+function toLangChainMessages(messages: Array<LLMMessage>): Array<HumanMessage | AIMessage | SystemMessage | ToolMessage> {
+  return messages.map(msg => {
+    switch (msg.role) {
+      case 'user':
+        return new HumanMessage({ content: msg.content })
+      case 'assistant':
+        return new AIMessage({ content: msg.content })
+      case 'system':
+        return new SystemMessage({ content: msg.content })
+      case 'tool':
+        return new ToolMessage({
+          content: msg.content,
+          tool_call_id: msg.toolName ?? 'unknown',
+          name: msg.toolName ?? 'unknown',
+        })
+    }
+  })
+}
+
+export function createChatModel(config: LLMConfig): BaseChatModel {
+  switch (config.format) {
+    case 'anthropic':
+      return new ChatAnthropic({
+        apiKey: config.apiKey,
+        anthropicApiUrl: config.baseUrl,
+        model: config.model,
+      })
+    case 'deepseek':
+      return new ChatDeepSeek({
+        apiKey: config.apiKey,
+        configuration: { baseURL: config.baseUrl },
+        model: config.model,
+      })
+    case 'openai':
+    default:
+      return new ChatOpenAI({
+        apiKey: config.apiKey,
+        configuration: { baseURL: config.baseUrl },
+        model: config.model,
+      })
   }
-  return { role: msg.role, content: msg.content }
 }
 
 export function createAdapter(config: LLMConfig): LLMAdapter {
+  const model = createChatModel(config)
   return {
     streamText(params) {
       let resolveMessages: (msgs: Array<LLMMessage>) => void = () => {}
       const responseMessages = new Promise<Array<LLMMessage>>(resolve => { resolveMessages = resolve })
 
       async function* runStream(): AsyncGenerator<LLMStreamEvent> {
-        const [vStreamText, languageModel] = await Promise.all([
-          import('ai').then(m => m.streamText),
-          createLanguageModel(config),
-        ])
+        const lcMessages = toLangChainMessages(params.messages)
 
-        const result = vStreamText({
-          model: languageModel as never,
-          system: params.system,
-          messages: params.messages.map(toProviderMessage) as never,
-          tools: params.tools as ToolSet,
-          stopWhen: stepCountIs(params.maxSteps ?? 5),
-          abortSignal: params.signal,
+        const toolKeys = Object.keys(params.tools ?? {})
+
+        if (toolKeys.length === 0) {
+          const messagesForModel = params.system
+            ? [new SystemMessage({ content: params.system }), ...lcMessages]
+            : lcMessages
+
+          let hasOutput = false
+          try {
+            const stream = await model.stream(messagesForModel, { signal: params.signal })
+            for await (const chunk of stream) {
+              if (typeof chunk.content === 'string' && chunk.content) {
+                hasOutput = true
+                yield { type: 'text-delta', delta: chunk.content }
+              } else if (Array.isArray(chunk.content)) {
+                for (const part of chunk.content) {
+                  if (part.type === 'text' && part.text) {
+                    hasOutput = true
+                    yield { type: 'text-delta', delta: part.text }
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            if (!hasOutput && err instanceof Error && err.name === 'AI_NoOutputGeneratedError') {
+              yield { type: 'text-delta', delta: '（API 返回了空响应，请重试）' }
+            }
+            throw err
+          }
+          resolveMessages([])
+          return
+        }
+
+        const { createReactAgent } = await import('@langchain/langgraph/prebuilt')
+
+        const agent = createReactAgent({
+          llm: model,
+          tools: params.tools as any,
+          prompt: params.system,
         })
 
+        let collectedToolResults: Array<LLMMessage> = []
         let hasOutput = false
-        const responsePromise = Promise.resolve(result.response).then((res: any) => {
-          const msgs: Array<LLMMessage> = []
-          for (const raw of res.messages ?? []) {
-            if (raw.role === 'assistant') {
-              let content = ''
-              if (typeof raw.content === 'string') {
-                content = raw.content
-              } else if (Array.isArray(raw.content)) {
-                content = raw.content
-                  .filter((part: any) => part.type === 'text')
-                  .map((part: any) => part.text)
-                  .join('')
-              }
-              msgs.push({ role: 'assistant', content })
-            } else if (raw.role === 'tool') {
-              msgs.push({ role: 'tool', content: typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content) })
-            }
-          }
-          return msgs
-        }).catch(() => [] as Array<LLMMessage>)
 
         try {
-          for await (const chunk of result.fullStream) {
-            switch (chunk.type) {
-              case 'text-delta':
-                hasOutput = true
-                yield { type: 'text-delta', delta: chunk.text }
+          const stream = agent.streamEvents(
+            { messages: lcMessages },
+            { version: 'v2', signal: params.signal }
+          )
+
+          for await (const event of stream) {
+            switch (event.event) {
+              case 'on_chat_model_stream': {
+                const chunk = event.data.chunk
+                if (typeof chunk.content === 'string' && chunk.content) {
+                  hasOutput = true
+                  yield { type: 'text-delta', delta: chunk.content }
+                }
                 break
-              case 'tool-call':
+              }
+              case 'on_tool_start': {
                 hasOutput = true
-                yield { type: 'tool-start', toolName: chunk.toolName, args: chunk.input }
+                const toolName = event.name
+                const args = event.data.input
+                yield { type: 'tool-start', toolName, args }
                 break
-              case 'tool-result':
+              }
+              case 'on_tool_end': {
                 hasOutput = true
-                yield { type: 'tool-end', toolName: chunk.toolName, result: chunk.output }
+                const toolName = event.name
+                const result = event.data.output.content
+                yield { type: 'tool-end', toolName, result }
+
+                const output = event.data.output
+                collectedToolResults.push({
+                  role: 'tool',
+                  content: typeof output.content === 'string' ? output.content : JSON.stringify(output.content),
+                  toolName: output.name ?? toolName,
+                  toolResult: output.content,
+                })
                 break
-              case 'error':
-                throw new Error((chunk.error as Error).message)
+              }
             }
           }
         } catch (err) {
@@ -121,33 +187,10 @@ export function createAdapter(config: LLMConfig): LLMAdapter {
           throw err
         }
 
-        resolveMessages(await responsePromise)
+        resolveMessages(collectedToolResults)
       }
 
       return { stream: runStream(), responseMessages }
     },
   }
-}
-
-async function createLanguageModel(config: LLMConfig): Promise<unknown> {
-  if (config.format === 'anthropic') {
-    const { createAnthropic } = await import('@ai-sdk/anthropic')
-    const provider = createAnthropic({ baseURL: config.baseUrl, apiKey: config.apiKey })
-    return provider.chat(config.model)
-  }
-  const { createOpenAI } = await import('@ai-sdk/openai')
-  const provider = createOpenAI({ baseURL: config.baseUrl, apiKey: config.apiKey })
-  const rawModel = provider.chat(config.model) as any
-
-  const origGetArgs = rawModel.getArgs.bind(rawModel)
-  rawModel.getArgs = async (options: Record<string, unknown>) => {
-    const result = await origGetArgs(options)
-    if (result.args?.messages) {
-      for (const msg of result.args.messages) {
-        if (msg.role === 'developer') msg.role = 'system'
-      }
-    }
-    return result
-  }
-  return rawModel
 }

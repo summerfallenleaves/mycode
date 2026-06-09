@@ -2,8 +2,9 @@
   // ── LLM Provider 配置 ──
   // defaultProvider 指定当前使用的提供商。
   // 每个 provider 通过 format 字段声明 API 格式：
-  //   "openai"    → 使用 @ai-sdk/openai，兼容 DeepSeek / OpenAI API
-  //   "anthropic" → 使用 @ai-sdk/anthropic，兼容 DeepSeek Anthropic 格式端点
+  //   "openai"    → 使用 @langchain/openai（兼容 OpenAI API / DeepSeek OpenAI 格式端点）
+  //   "anthropic" → 使用 @langchain/anthropic（兼容 Anthropic API / DeepSeek Anthropic 格式端点）
+  //   "deepseek"  → 使用 @langchain/deepseek（原生 DeepSeek 支持）
   // API Key 读取优先级：环境变量 MYCODE_API_KEY > 配置文件中对应字段
   "llm": {
     "defaultProvider": "deepseek-openai",
@@ -23,6 +24,14 @@
         "model": "deepseek-v4-pro",
         "contextWindow": 1_000_000,
         "maxOutputTokens": 384_000
+      },
+      "deepseek-native": {
+        "format": "deepseek",
+        "baseUrl": "https://api.deepseek.com",
+        "apiKey": "deepseek-api",
+        "model": "deepseek-chat",
+        "contextWindow": 128_000,
+        "maxOutputTokens": 32_000
       }
     }
   },

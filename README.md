@@ -168,7 +168,7 @@ pnpm --filter @my-agent/core test
 |---|---|
 | 运行时 | Node.js 26+, pnpm 10.10.0 |
 | 语言 | TypeScript 5.9 |
-| LLM SDK | Vercel AI SDK v6 (`@ai-sdk/openai`, `@ai-sdk/anthropic`) |
+| LLM 框架 | LangChain.js 1.x + LangGraph 0.3.x |
 | CLI 前端 | Ink 7 (React for terminal) |
 | Web 前端 | Next.js 15, React 19 |
 | 构建 | tsup, Next.js |

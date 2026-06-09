@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 // ── 类型定义 ──
 
 export interface LLMProviderConfig {
-  format: 'openai' | 'anthropic'
+  format: 'openai' | 'anthropic' | 'deepseek'
   baseUrl: string
   apiKey: string
   model: string
