@@ -9,8 +9,8 @@ export type { AgentConfig } from './agent.js'
 export type { AgentEvent } from './event.js'
 export { assertNever } from './event.js'
 
-export type { LLMAdapter, LLMConfig, LLMMessage, ProviderFormat } from './llm/adapter.js'
-export { createAdapter, createChatModel } from './llm/adapter.js'
+export type { LLMConfig, LLMMessage, ProviderFormat } from './llm/adapter.js'
+export { createChatModel } from './llm/adapter.js'
 
 export { ToolRegistry } from './tools/registry.js'
 export type { Tool, ToolContext, ToolEvent, ToolResult, QuestionPayload, QuestionOption } from './tools/registry.js'
