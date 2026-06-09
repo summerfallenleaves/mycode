@@ -232,7 +232,10 @@ export class Agent {
             toolEventBuffer.length = 0
 
             const output = event.data.output
-            const result = output.content
+            let result = output.content
+            if (typeof result === 'string') {
+              try { result = JSON.parse(result) } catch { /* keep as string */ }
+            }
             yield { type: 'tool_end', turnId, toolName, result }
             this.messages.push({
               role: 'tool',
