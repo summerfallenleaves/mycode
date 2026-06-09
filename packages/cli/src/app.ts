@@ -418,7 +418,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     })
   }
 
-  // Key handler
+   // Key handler
   screen.on('keypress', (_ch: string, key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => {
     const ch = _ch
     const allProviders = getProviderList()
@@ -655,6 +655,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     }
 
     // Enter: submit
+    s.input = s.input.replace(/\r/g, '').replace(/\n/g, '')
     if ((key.name === 'return' || key.name === 'enter') && s.input.trim()) {
       handleSubmit()
       return
@@ -696,7 +697,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     }
 
     // Regular character
-    if (ch && !key.ctrl && !key.meta) {
+    if (ch && !key.ctrl && !key.meta && ch !== '\r' && ch !== '\n') {
       s.input = s.input.slice(0, s.cursorIndex) + ch + s.input.slice(s.cursorIndex)
       s.cursorIndex += ch.length
       s.selectedIdx = 0
