@@ -247,13 +247,18 @@ pnpm publish -r --access public     # 发布所有公开包
 .mycode/            # 运行时配置目录（不打包）
   mycode.jsonc      # Agent 配置（LLM / MCP / 技能 / 安全）
   skills/           # 技能文件（运行时发现）
-  sessions/         # 会话持久化（JSON 文件）
+  sessions/         # 会话持久化（SessionFile v2 Turn 格式）
 packages/
-  core/     # Agent 核心逻辑（纯 TS，零 UI 依赖）
+  core/     # Agent 核心逻辑（LangChain.js 编排，纯 TS，零 UI 依赖）
     src/
+      llm/          # ChatModel 工厂（createChatModel → LangChain Provider）
+      tools/        # 工具注册 + 内置工具 + MCP 代理
       memory/       # Memory 系统（store/types/mycode-md）
-  cli/      # Ink 终端界面
-  web/      # Next.js Web 应用
+      session/      # SessionFile v2（Turn 分组格式，5 种消息类型）
+      skill/        # SKILL.md 文档式技能
+      safety/       # 超时/限流/沙箱
+  cli/      # @unblessed/node 命令式 TUI
+  web/      # Next.js Web 应用 (SSE)
   shared/   # 共享类型和工具函数
 ```
 
@@ -267,13 +272,14 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 - 技能采用 **SKILL.md 文档式**：目录中的每个子目录包含 `SKILL.md`（YAML frontmatter + Markdown 指令体），启动时自动扫描注册到 Agent。技能以 `## Available Skills` 块注入 system prompt，不由模型自主选择使用。
 - 每个技能自动注册为 `/skill-name` CLI 命令，用户可通过该命令附带额外参数触发。
 - MCP 服务器地址和参数在 `mycode.jsonc` 的 `mcpServers` 字段中配置。MCP 工具通过 `MCPClientManager` 连接到 ToolRegistry。
+- **LLM Agent 编排**: 使用 LangChain.js `createReactAgent`（基于 LangGraph）管理 ReAct 循环，`streamEvents` v2 驱动流式输出。`createChatModel()` 工厂函数支持 OpenAI/Anthropic/DeepSeek 三种 Provider 格式。
 - 上下文窗口上限通过 `agent.maxContextTokens` 配置。
 - 所有源码文件必须包含文件级 `@fileoverview` JSDoc 注释作为文件说明。
 
 ## Memory 系统操作约定
 
 - **MYCODE.md**（共享规则）：放置于 `~/.mycode/MYCODE.md`（全局）和 `.mycode/MYCODE.md`（项目级），合并为 `## Project Rules` 注入 system prompt。用于跨会话共享的持久规则和约定。Agent 可通过 `memoryTool` 的 `rule` action 或 CLI `/rule` 命令追加规则。MYCODE.md **不受** `/memory` 和 `/forget` 命令管理。
-- **会话持久化**（动态回溯）：通过 `FileSessionStore` 自动保存到 `.mycode/sessions/<sessionId>/messages.json`。每次 run 结束后自动触发，无需手动干预。
+- **会话持久化**（动态回溯）：通过 `FileSessionStore` 自动保存到 `.mycode/sessions/<sessionId>/messages.json`（SessionFile v2 Turn 分组格式）。每次 run 结束后自动触发，无需手动干预。恢复会话时按 entries 重建 messages 供 LLM 上下文。
 - **会话记忆**（Session Memory）：通过 `memoryTool`（add/search/list）或 CLI 命令（`/remember` `/forget`）操作。记忆存储于 `.mycode/sessions/<sessionId>/memory.json`，仅属于当前会话。恢复会话时自动注入到 system prompt（`## Session Memory` 段，前 4000 字符）。`/memory` 和 `/forget` 命令**只能管理当前会话的记忆**。
 - **注入顺序**（由前到后覆盖）：`systemPrompt` → `MYCODE.md` → `session memory`（恢复会话时） → `skillPrompt`
 - **记忆类型**（5 种）：`convention`（规范）、`decision`（决策）、`fact`（事实）、`preference`（偏好）、`lesson`（经验教训）
@@ -297,7 +303,7 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 | 命令 | 功能 |
 |---|---|
 | `/compact` | 手动触发上下文压缩，绕过冷却期。压缩后状态栏显示消息条数变化和节省的 token 数 |
-| `/connect` | 交互式连接新的 LLM Provider，依次选择格式（openai/anthropic）、输入名称、Base URL、API Key、模型名 |
+| `/connect` | 交互式连接新的 LLM Provider，依次选择格式（openai/anthropic/deepseek）、输入 Base URL、API Key、模型名 |
 | `/exit` `/q` | 退出 mycode。如果当前会话有对话记录，退出后在终端显示恢复命令 `mycode -c <sessionId>` |
 | `/forget` | 列出当前会话的所有记忆条目（带 ID 和类型），输入 `/forget <id>` 删除指定条目 |
 | `/init` | 分析代码库并生成或增量更新项目根目录的 `AGENTS.md`。Agent 自主扫描配置文件、目录结构、编码规范后写入 |
