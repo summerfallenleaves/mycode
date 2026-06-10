@@ -420,6 +420,8 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
    // Key handler
   screen.on('keypress', (_ch: string, key: { name: string; ctrl: boolean; shift: boolean; meta: boolean; sequence: string }) => {
     const ch = _ch
+    // macOS Terminal sends \r + \n for Enter; ignore \n to prevent double-processing
+    if (ch === '\n') return
     const allProviders = getProviderList()
 
     // Model selection mode
