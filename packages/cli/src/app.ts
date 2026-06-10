@@ -665,9 +665,9 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       return
     }
 
-    // Enter: submit
+    // Enter: submit (handle \r, \n, and return/enter key names for terminal compatibility)
     s.input = s.input.replace(/\r/g, '').replace(/\n/g, '')
-    if ((key.name === 'return' || key.name === 'enter') && s.input.trim()) {
+    if ((key.name === 'return' || key.name === 'enter' || ch === '\r' || ch === '\n') && s.input.trim()) {
       handleSubmit()
       return
     }
