@@ -644,7 +644,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       return
     }
     if (s.shellOutput) {
-      if (key.name === 'escape' || key.name === 'return' || key.name === 'enter') { s.shellOutput = null; update() }
+      if (key.name === 'escape') { s.shellOutput = null; update() }
       return
     }
 
