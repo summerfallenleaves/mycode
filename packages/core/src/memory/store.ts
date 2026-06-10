@@ -163,7 +163,7 @@ export class FileMemoryStore {
 
   delete(id: string): { found: boolean } {
     const data = this.readFile()
-    const idx = data.entries.findIndex(e => e.id === id)
+    const idx = data.entries.findIndex(e => e.id === id || e.id.startsWith(id))
     if (idx === -1) return { found: false }
     data.entries.splice(idx, 1)
     this.writeFile(data)
