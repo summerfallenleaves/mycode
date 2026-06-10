@@ -866,7 +866,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       if (entries.length === 0) {
         s.statusMsg = { text: '暂无记忆可删除', color: 'yellow' }
       } else {
-        const summary = entries.slice(0, 20).map((e, i) => `${i + 1}. [${e.id.slice(0, 8)}] [${e.type}] ${e.content.slice(0, 60)}`).join('\n')
+        const summary = entries.slice(0, 20).map((e, i) => `${i + 1}. [${e.id}] [${e.type}] ${e.content.slice(0, 60)}`).join('\n')
         s.forgetList = `记忆列表（输入 /forget <id> 删除）：\n${summary}`
       }
       clearInput()
