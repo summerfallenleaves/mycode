@@ -230,9 +230,8 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     screen.render()
   }
 
-  // 在 blessed draw() 完成后同步定位光标到输入框，
-  // 避免 sc/rc 恢复到错误位置或 setImmediate 与高频 update() 竞态。
-  screen.on('render', positionCursorForIme)
+  // Temporarily disable IME cursor positioning to test input issue
+  // screen.on('render', positionCursorForIme)
 
   function renderContentArea(): void {
     const maxTurns = Math.max(2, Math.floor((layout.realRows - 10) / 4))
@@ -698,6 +697,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
 
     // Regular character
     if (ch && !key.ctrl && !key.meta && ch !== '\r' && ch !== '\n') {
+      s.statusMsg = null
       s.input = s.input.slice(0, s.cursorIndex) + ch + s.input.slice(s.cursorIndex)
       s.cursorIndex += ch.length
       s.selectedIdx = 0
