@@ -313,8 +313,9 @@ Core 包不应依赖 cli 或 web 中的任何内容。Shared 包可被 core、cl
 | `/new` | 重置当前会话，清空对话历史和 Agent 实例 |
 | `/remember <内容>` | 将内容以 `fact` 类型存入当前会话的 memory.json |
 | `/resume` | 打开历史会话列表面板，选择后恢复该会话的对话历史 |
-| `/rule <内容>` | 将内容以 `convention` 类型追加到项目的 `.mycode/MYCODE.md`，作为跨会话共享的项目规则 |
+| `/rule <内容>` | 将内容以 `convention` 类型追加到项目的 `.mycode/MYCODE.md`，同时注入当前会话即时生效 |
 | `/skills` | 显示已扫描到的技能列表（名称、描述、来源路径） |
+| `!<命令>` | 执行 Shell 命令，结果内联显示在交互历史中并保存到消息记录 |
 
 ## GitHub提交规则
 
