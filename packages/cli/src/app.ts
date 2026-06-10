@@ -805,6 +805,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (submitInput === '/models') {
       s.showModelSelect = true
       s.modelSelectIdx = 0
+      s.statusMsg = null
       clearInput()
       update()
       return
