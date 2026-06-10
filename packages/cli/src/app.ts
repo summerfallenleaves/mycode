@@ -101,6 +101,7 @@ interface AppState {
   connectConfig: ConnectConfig
   connectSelectIdx: number
   unknownCmd: string | null
+  forgetList: string | null
   showResumeList: boolean
   resumeList: Array<{ sessionId: string; turnCount: number; updatedAt: string }>
   resumeSelectIdx: number
@@ -122,6 +123,7 @@ function createState(): AppState {
     contextUsage: null,
     showModelSelect: false,
     modelSelectIdx: 0,
+    forgetList: null,
     showMcpList: false,
     mcpStatuses: MCP_MANAGER?.getStatuses() ?? [],
     showSkillsList: false,
@@ -247,6 +249,8 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       content = renderShellOutputPanel(s.shellOutput)
     } else if (s.connectStep) {
       content = renderConnectWizardPanel(s.connectStep, s.connectConfig, s.connectSelectIdx)
+    } else if (s.forgetList) {
+      content = renderUnknownCmdPanel(s.forgetList)
     } else if (s.unknownCmd) {
       content = renderUnknownCmdPanel(s.unknownCmd)
     } else if (s.showModelSelect) {
@@ -625,7 +629,13 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     }
 
     // Dismiss overlays
-    if (s.unknownCmd) { s.unknownCmd = null; update(); return }
+    if (s.unknownCmd && ch && ch !== '\r' && ch !== '\n' && key.name !== 'return' && key.name !== 'enter') {
+      s.unknownCmd = null; update(); return
+    }
+    if (s.forgetList) {
+      if (key.name === 'escape') { s.forgetList = null; update() }
+      return
+    }
     if (s.showMcpList || s.showSkillsList) {
       if (key.name === 'escape') { s.showMcpList = false; s.showSkillsList = false; update() }
       return
@@ -857,7 +867,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
         s.statusMsg = { text: '暂无记忆可删除', color: 'yellow' }
       } else {
         const summary = entries.slice(0, 20).map((e, i) => `${i + 1}. [${e.id.slice(0, 8)}] [${e.type}] ${e.content.slice(0, 60)}`).join('\n')
-        s.unknownCmd = `记忆列表（输入 /forget <id> 删除）：\n${summary}`
+        s.forgetList = `记忆列表（输入 /forget <id> 删除）：\n${summary}`
       }
       clearInput()
       update()
