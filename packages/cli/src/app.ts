@@ -92,6 +92,7 @@ interface AppState {
   contextUsage: { used: number; limit: number; percentage: number } | null
   showModelSelect: boolean
   modelSelectIdx: number
+  modelSelectOpenedAt: number
   showMcpList: boolean
   mcpStatuses: MCPServerStatus[]
   showSkillsList: boolean
@@ -123,6 +124,7 @@ function createState(): AppState {
     contextUsage: null,
     showModelSelect: false,
     modelSelectIdx: 0,
+    modelSelectOpenedAt: 0,
     forgetList: null,
     showMcpList: false,
     mcpStatuses: MCP_MANAGER?.getStatuses() ?? [],
@@ -432,6 +434,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (s.showModelSelect) {
       if (key.name === 'escape') { s.showModelSelect = false; update(); return }
       if (key.name === 'return' || key.name === 'enter') {
+        if (Date.now() - s.modelSelectOpenedAt < 500) return
         const entry = allProviders[s.modelSelectIdx]
         if (entry) {
           s.activeProvider = entry[0]
@@ -805,6 +808,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (submitInput === '/models') {
       s.showModelSelect = true
       s.modelSelectIdx = 0
+      s.modelSelectOpenedAt = Date.now()
       s.statusMsg = null
       clearInput()
       update()
