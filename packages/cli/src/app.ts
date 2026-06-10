@@ -921,6 +921,9 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
         s.statusMsg = result.error
           ? { text: `规则存储失败: ${result.error}`, color: 'red' }
           : { text: `已存入项目规则: ${content.slice(0, 60)}`, color: 'green' }
+        if (!result.error && agent) {
+          agent.addSystemMessage(`[新增项目规则] ${content}`)
+        }
       }
       clearInput()
       update()

@@ -540,6 +540,10 @@ ${conversationText}
     return this.messages
   }
 
+  addSystemMessage(content: string): void {
+    this.messages.push({ role: 'system', content })
+  }
+
   getContextUsage(): { used: number; limit: number; percentage: number } {
     const systemLength = this.config.resolvedSystemPrompt.length
     const messagesLength = this.messages
