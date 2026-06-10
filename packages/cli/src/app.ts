@@ -735,18 +735,28 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
       if (selected) submitInput = selected
     }
 
-    // Shell command
+    // Shell command — display inline in conversation history
     if (submitInput.startsWith('!') && submitInput.length > 1) {
       const cmd = submitInput.slice(1).trim()
+      let output = ''
       if (cmd) {
         try {
-          const stdout = execSync(cmd, { timeout: 30_000, maxBuffer: 5 * 1024 * 1024, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
-          s.shellOutput = { command: cmd, stdout: stdout.trim(), stderr: '', exitCode: 0 }
+          const stdout = execSync(cmd, { timeout: 30_000, maxBuffer: 5 * 1024 * 1024, encoding: 'utf-8' })
+          output = stdout.trim()
         } catch (err: unknown) {
-          const e = err as { stdout?: string; stderr?: string; status?: number }
-          s.shellOutput = { command: cmd, stdout: (e.stdout ?? '').toString().trim(), stderr: (e.stderr ?? '').toString().trim(), exitCode: e.status ?? 1 }
+          const e = err as { stdout?: string; stderr?: string }
+          output = (e.stdout ?? '') + (e.stderr ?? '')
         }
       }
+
+      const turnId = `shell-${Date.now()}`
+      s.events.push({ type: 'user_message', content: submitInput })
+      s.events.push({ type: 'answer_start', turnId })
+      s.events.push({ type: 'answer_delta', turnId, delta: output || '(无输出)' })
+      s.events.push({ type: 'answer_end', turnId, fullText: output || '(无输出)' })
+
+      agent?.addSystemMessage?.(`[Shell: ${cmd}]\n${output}`)
+
       clearInput()
       update()
       return
