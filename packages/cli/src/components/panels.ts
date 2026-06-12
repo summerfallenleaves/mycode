@@ -100,9 +100,10 @@ export function renderSkillsListPanel(skills: SkillInfo[]): string {
     lines.push('{gray-fg}  (未配置技能，将 SKILL.md 放入 .mycode/skills/ 目录){/gray-fg}')
   }
   for (const s of skills) {
-    lines.push(` ${s.name}`)
+    lines.push(` {bold}${s.name}{/bold}`)
     if (s.description) {
-      lines.push(`  {gray-fg}${s.description}{/gray-fg}`)
+      const desc = s.description.length > 120 ? s.description.slice(0, 120) + '…' : s.description
+      lines.push(`  {gray-fg}${desc}{/gray-fg}`)
     }
     lines.push(`  {gray-fg}${s.location}{/gray-fg}`)
   }
