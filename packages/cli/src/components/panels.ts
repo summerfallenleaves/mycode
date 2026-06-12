@@ -102,8 +102,7 @@ export function renderSkillsListPanel(skills: SkillInfo[]): string {
   for (const s of skills) {
     lines.push(` {bold}${s.name}{/bold}`)
     if (s.description) {
-      const desc = s.description.length > 120 ? s.description.slice(0, 120) + '…' : s.description
-      lines.push(`  {gray-fg}${desc}{/gray-fg}`)
+      lines.push(`  {gray-fg}${s.description}{/gray-fg}`)
     }
     lines.push(`  {gray-fg}${s.location}{/gray-fg}`)
   }
