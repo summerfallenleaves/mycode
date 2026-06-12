@@ -315,7 +315,9 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (!sidebarBox) return
     const hasPanel = s.showModelSelect || s.showMcpList || s.showSkillsList || s.showResumeList || s.forgetList || s.unknownCmd
     if (hasPanel) {
-      const empty = ''.padEnd(layout.sidebarWidth, ' ')
+      // 用多行空格填充整个 sidebar 区域以覆盖残留字符
+      const lines = (screen.height as number) || 24
+      const empty = Array(lines).fill(' '.repeat(layout.sidebarWidth)).join('\n')
       sidebarBox.setContent(empty)
       return
     }
