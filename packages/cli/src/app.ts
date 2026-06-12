@@ -314,6 +314,7 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
   function renderSidebarBox(): void {
     if (!sidebarBox) return
     sidebarBox.setContent('')
+    if (s.showModelSelect || s.showMcpList || s.showSkillsList || s.showResumeList || s.forgetList || s.unknownCmd) return
     sidebarBox.setContent(renderSidebar(s.todos, layout.sidebarWidth))
   }
 
