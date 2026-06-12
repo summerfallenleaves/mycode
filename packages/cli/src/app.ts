@@ -315,10 +315,10 @@ export function createApp(screen: blessed.Widgets.Screen, opts: { continueSessio
     if (!sidebarBox) return
     const hasPanel = s.showModelSelect || s.showMcpList || s.showSkillsList || s.showResumeList || s.forgetList || s.unknownCmd
     if (hasPanel) {
-      sidebarBox.hide()
+      const empty = ''.padEnd(layout.sidebarWidth, ' ')
+      sidebarBox.setContent(empty)
       return
     }
-    sidebarBox.show()
     sidebarBox.setContent(renderSidebar(s.todos, layout.sidebarWidth))
   }
 
